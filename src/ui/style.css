@@ -113,6 +113,7 @@ button.primary:hover { background: #4a8fe3; }
 #status .bar { height: 3px; background: var(--line); border-radius: 2px; margin-top: 6px; overflow: hidden; width: 200px; }
 #status .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s; }
 #legend { right: 12px; bottom: 12px; }
+#problem { left: 50%; top: 12px; transform: translateX(-50%); max-width: min(560px, 80%); border-color: var(--warn); color: var(--warn); pointer-events: auto; user-select: text; }
 #legend .item { display: flex; align-items: center; gap: 6px; }
 #legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 #legend .grad { width: 180px; height: 10px; border-radius: 3px; margin: 4px 0 2px; }

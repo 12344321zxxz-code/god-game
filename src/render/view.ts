@@ -17,9 +17,23 @@ export class PlanetView {
   private controls: OrbitControls;
   private colorTex?: THREE.DataTexture;
   private heightTex?: THREE.DataTexture;
-  private globeMat: THREE.MeshStandardMaterial;
-  private mapMat: THREE.MeshStandardMaterial;
   private globe: THREE.Mesh;
+  private mapMeshes: THREE.Mesh[] = [];
+  private atmo: THREE.Mesh;
+  private starField: THREE.Points;
+  /**
+   * Rendering quality level. Some GPUs/drivers fail on parts of the full
+   * material (vertex texture fetch, half-float bump maps), so after every
+   * upload a tiny offscreen test frame checks the planet is really drawn and
+   * steps down a level if not:
+   *   0 lit + relief (displacement + bump)
+   *   1 lit, no relief
+   *   2 unlit colour only, no mipmaps
+   */
+  quality = 0;
+  /** Called with a human-readable message when rendering degrades or fails. */
+  onProblem: (msg: string) => void = (m) => console.warn(m);
+  private shaderErrors: string[] = [];
   private sun = new THREE.DirectionalLight(0xffffff, 2.6);
   private mapSun = new THREE.DirectionalLight(0xffffff, 1.6);
   private globeArrows: THREE.LineSegments;
@@ -51,13 +65,27 @@ export class PlanetView {
     this.controls.zoomSpeed = 0.8;
     this.controls.enablePan = false;
 
-    this.globeMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
-    this.globe = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), this.globeMat);
+    this.renderer.debug.onShaderError = (gl, program, vs, fs) => {
+      const log = [gl.getProgramInfoLog(program), gl.getShaderInfoLog(vs), gl.getShaderInfoLog(fs)]
+        .filter((x) => x && x.trim())
+        .join(' | ')
+        .slice(0, 400);
+      this.shaderErrors.push(log || 'unknown shader error');
+      console.error('Shader error', log);
+    };
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.onProblem('The GPU reset the WebGL context. Reload the page to continue.');
+    });
+
+    this.globe = new THREE.Mesh(new THREE.SphereGeometry(1, 1024, 512), new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 }));
     this.globeScene.add(this.globe);
-    this.globeScene.add(this.atmosphere());
+    this.atmo = this.atmosphere();
+    this.globeScene.add(this.atmo);
     this.globeScene.add(new THREE.HemisphereLight(0xbcd4ff, 0x1a1410, 0.6));
     this.globeScene.add(this.sun);
-    this.globeScene.add(this.stars());
+    this.starField = this.stars();
+    this.globeScene.add(this.starField);
     this.globeScene.background = new THREE.Color(0x03050a);
     this.globeArrows = new THREE.LineSegments(new THREE.BufferGeometry(), this.arrowMat);
     this.globeArrows.visible = false;
@@ -66,11 +94,12 @@ export class PlanetView {
     // --- flat map: three copies side by side for seamless horizontal wrap ---
     this.ortho = new THREE.OrthographicCamera(-1, 1, 0.5, -0.5, -10, 10);
     this.ortho.position.set(0, 0, 5);
-    this.mapMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
     const plane = new THREE.PlaneGeometry(2, 1);
+    const mapMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
     for (const dx of [-2, 0, 2]) {
-      const m = new THREE.Mesh(plane, this.mapMat);
+      const m = new THREE.Mesh(plane, mapMat);
       m.position.x = dx;
+      this.mapMeshes.push(m);
       this.mapGroup.add(m);
       const arrows = new THREE.LineSegments(new THREE.BufferGeometry(), this.arrowMat);
       arrows.position.set(dx, 0, 0.01);
@@ -103,10 +132,6 @@ export class PlanetView {
       const ct = new THREE.DataTexture(rgba, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
       ct.colorSpace = THREE.SRGBColorSpace;
       ct.wrapS = THREE.RepeatWrapping;
-      ct.generateMipmaps = true;
-      ct.minFilter = THREE.LinearMipmapLinearFilter;
-      ct.magFilter = THREE.LinearFilter;
-      ct.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
       const ht = new THREE.DataTexture(height, w, h, THREE.RedFormat, THREE.HalfFloatType);
       ht.wrapS = THREE.RepeatWrapping;
       ht.minFilter = THREE.LinearFilter;
@@ -114,21 +139,14 @@ export class PlanetView {
       ht.generateMipmaps = false;
       this.colorTex = ct;
       this.heightTex = ht;
-      for (const m of [this.globeMat, this.mapMat]) {
-        m.map = ct;
-        m.bumpMap = ht;
-        m.needsUpdate = true;
-      }
-      this.globeMat.displacementMap = ht;
     } else {
       this.colorTex.image.data = rgba;
       this.heightTex!.image.data = height;
-      this.colorTex.needsUpdate = true;
-      this.heightTex!.needsUpdate = true;
     }
     this.colorTex.needsUpdate = true;
     this.heightTex!.needsUpdate = true;
-    this.applyRelief();
+    this.applyQuality(this.quality);
+    this.verify();
   }
 
   setColor(rgba: Uint8Array, height: Uint16Array) {
@@ -147,12 +165,95 @@ export class PlanetView {
 
   private applyRelief() {
     const k = this.reliefExaggeration;
+    const g = this.globe.material as THREE.MeshStandardMaterial;
+    const m = this.mapMeshes[0].material as THREE.MeshStandardMaterial;
+    if (this.quality !== 0 || !(g instanceof THREE.MeshStandardMaterial)) return;
     // displacement in globe radii per metre of height
-    this.globeMat.displacementScale = (k / (this.radiusKm * 1000)) * 1;
-    this.globeMat.bumpScale = 0.00006 * k;
-    this.mapMat.bumpScale = 0.00004 * k;
-    this.globeMat.needsUpdate = true;
-    this.mapMat.needsUpdate = true;
+    g.displacementScale = k / (this.radiusKm * 1000);
+    g.bumpScale = 0.00006 * k;
+    m.bumpScale = 0.00004 * k;
+  }
+
+  /** Builds the globe and map materials for a quality level. */
+  private applyQuality(level: number) {
+    this.quality = level;
+    const ct = this.colorTex!;
+    const ht = this.heightTex!;
+    const mips = level < 2;
+    if (ct.generateMipmaps !== mips) {
+      ct.generateMipmaps = mips;
+      ct.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      ct.anisotropy = mips ? this.renderer.capabilities.getMaxAnisotropy() : 1;
+      ct.needsUpdate = true;
+    } else if (mips) {
+      ct.minFilter = THREE.LinearMipmapLinearFilter;
+      ct.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    }
+    let globeMat: THREE.Material;
+    let mapMat: THREE.Material;
+    if (level === 0) {
+      globeMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, map: ct, bumpMap: ht, displacementMap: ht });
+      mapMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, map: ct, bumpMap: ht });
+    } else if (level === 1) {
+      globeMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, map: ct });
+      mapMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, map: ct });
+    } else {
+      globeMat = new THREE.MeshBasicMaterial({ map: ct });
+      mapMat = new THREE.MeshBasicMaterial({ map: ct });
+    }
+    (this.globe.material as THREE.Material).dispose();
+    this.globe.material = globeMat;
+    (this.mapMeshes[0].material as THREE.Material).dispose();
+    for (const m of this.mapMeshes) m.material = mapMat;
+    this.applyRelief();
+  }
+
+  /**
+   * Renders one 32×32 offscreen frame of each view against a magenta
+   * background and checks the planet covers the centre. If it doesn't, drops
+   * a quality level and tries again.
+   */
+  private verify() {
+    const MAGENTA = new THREE.Color(1, 0, 1);
+    const rt = new THREE.WebGLRenderTarget(32, 32);
+    const px = new Uint8Array(4);
+    const cam = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    cam.position.set(0, 0, 3.6);
+    cam.lookAt(0, 0, 0);
+    const probe = (scene: THREE.Scene, camera: THREE.Camera): boolean => {
+      const bg = scene.background;
+      scene.background = MAGENTA;
+      this.atmo.visible = false;
+      this.starField.visible = false;
+      this.renderer.setRenderTarget(rt);
+      this.renderer.render(scene, camera);
+      this.renderer.readRenderTargetPixels(rt, 16, 16, 1, 1, px);
+      this.renderer.setRenderTarget(null);
+      scene.background = bg;
+      this.atmo.visible = true;
+      this.starField.visible = true;
+      return !(px[0] > 240 && px[1] < 15 && px[2] > 240);
+    };
+    const mapCam = new THREE.OrthographicCamera(-0.2, 0.2, 0.2, -0.2, -10, 10);
+    mapCam.position.set(0, 0, 5);
+    const failures: string[] = [];
+    let ok = false;
+    for (;;) {
+      this.shaderErrors = [];
+      ok = probe(this.globeScene, cam) && probe(this.mapScene, mapCam);
+      if (ok) break;
+      failures.push(`level ${this.quality}${this.shaderErrors.length ? ` (${this.shaderErrors[0]})` : ''}`);
+      if (this.quality >= 2) {
+        this.onProblem(`The planet could not be drawn on this GPU. Details: ${failures.join('; ')}`);
+        break;
+      }
+      this.applyQuality(this.quality + 1);
+    }
+    rt.dispose();
+    if (ok && failures.length) {
+      const what = this.quality === 1 ? 'relief shading is off' : 'lighting and relief are off';
+      this.onProblem(`Simplified rendering on this GPU: ${what}. Details: ${failures.join('; ')}`);
+    }
   }
 
   /** Line segments as xyz pairs on the unit sphere. */

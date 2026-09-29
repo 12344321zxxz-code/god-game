@@ -18,7 +18,16 @@ const hoverEl = document.getElementById('hover')!;
 const statusEl = document.getElementById('status')!;
 const legendEl = document.getElementById('legend')!;
 
+const problemEl = document.getElementById('problem')!;
+function showProblem(msg: string) {
+  problemEl.textContent = msg;
+  problemEl.classList.remove('hidden');
+}
+window.addEventListener('error', (e) => showProblem(`Error: ${e.message}`));
+window.addEventListener('unhandledrejection', (e) => showProblem(`Error: ${String(e.reason)}`));
+
 const view = new PlanetView(stage);
+view.onProblem = showProblem;
 const client = new WorldClient();
 
 let params: PlanetParams = decodeParams(location.hash) ?? presetParams('earth', randomSeed());
