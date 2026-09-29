@@ -1,0 +1,29 @@
+{
+  "name": "god-game",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Procedural planet generator — the world layer of a future god game.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:single": "tsc --noEmit && vite build --mode single",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "bench": "tsx scripts/bench.ts",
+    "shot": "node scripts/screenshot.mjs"
+  },
+  "dependencies": {
+    "simplex-noise": "^4.0.3",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.2"
+  }
+}
