@@ -22,7 +22,7 @@ html, body {
   overflow: hidden;
 }
 
-#app { display: flex; height: 100vh; }
+#app { display: flex; height: 100%; }
 #stage { position: relative; flex: 1; min-width: 0; }
 #stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #stage canvas:active { cursor: grabbing; }
@@ -117,3 +117,10 @@ button.primary:hover { background: #4a8fe3; }
 #legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 #legend .grad { width: 180px; height: 10px; border-radius: 3px; margin: 4px 0 2px; }
 #legend .ticks { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+
+@media (max-width: 720px) {
+  html, body { overflow: auto; }
+  #app { flex-direction: column; height: auto; }
+  #stage { height: 70vh; flex: none; }
+  #panel { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+}

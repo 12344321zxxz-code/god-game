@@ -58,8 +58,12 @@ const panel = new Panel(document.getElementById('panel')!, params, display, {
     if (current) download(textureToPng(current.rgba, current.width, current.height), `${fileStem()}-${display.mode}-map.png`);
   },
   async onCopyLink() {
-    await navigator.clipboard?.writeText(location.href);
-    flashStatus('Link copied');
+    try {
+      await navigator.clipboard.writeText(location.href);
+      flashStatus('Link copied');
+    } catch {
+      flashStatus(`Copy this link: ${location.href}`);
+    }
   },
 });
 view.setRelief(display.relief);
@@ -73,7 +77,11 @@ function scheduleGenerate() {
 }
 
 async function generate() {
-  history.replaceState(null, '', `#${encodeParams(params)}`);
+  try {
+    history.replaceState(null, '', `#${encodeParams(params)}`);
+  } catch {
+    // sandboxed previews may block history changes; links just won't update
+  }
   setStatus('Starting…', 0.02);
   latestGenerate = await client.send({ type: 'generate', params, texWidth: TEX_W, texHeight: TEX_H, mode: display.mode, hex: display.hex });
 }
