@@ -39,6 +39,7 @@ export class Engine {
           id: req.id,
           params: world.params,
           stats: world.stats,
+          score: world.score,
           plates: world.plates,
           width: this.baker.width,
           height: this.baker.height,

@@ -2,6 +2,7 @@ import type { PlanetParams } from '../core/presets';
 import { buildHexGrid, meanSpacingKm, type HexGrid } from '../grid/hexgrid';
 import { runSnapshotTectonics } from './tectonics/snapshot';
 import { buildElevation } from './terrain/elevation';
+import { scoreWorld } from './metrics/scorecard';
 import type { World } from './world';
 
 export type ProgressFn = (stage: string, fraction: number) => void;
@@ -41,7 +42,7 @@ export function generateWorld(params: PlanetParams, progress: ProgressFn = () =>
     if (h.elevation[c] > maxE) maxE = h.elevation[c];
     if (h.elevation[c] < minE) minE = h.elevation[c];
   }
-  return {
+  const world: World = {
     params,
     grid,
     plates: tect.plates,
@@ -62,4 +63,7 @@ export function generateWorld(params: PlanetParams, progress: ProgressFn = () =>
       timings,
     },
   };
+  progress('Scoring', 0.7);
+  world.score = time('score', () => scoreWorld(world));
+  return world;
 }

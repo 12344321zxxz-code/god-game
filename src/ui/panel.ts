@@ -1,6 +1,7 @@
 import { GRID_OPTIONS, PRESET_LABELS, cellCount, presetParams, type PlanetParams, type PresetId } from '../core/presets';
 import { MAP_MODES, type MapMode } from '../render/bake';
 import type { ViewMode } from '../render/view';
+import type { Scorecard } from '../sim/metrics/scorecard';
 import type { WorldStats } from '../sim/world';
 
 export interface DisplayState {
@@ -29,6 +30,8 @@ export function randomSeed(): string {
 /** Builds the right-hand control panel and keeps it in sync. */
 export class Panel {
   private statsEl!: HTMLElement;
+  private scoreEl!: HTMLElement;
+  private scoreSumEl!: HTMLElement;
   private inputs: Record<string, HTMLInputElement | HTMLSelectElement> = {};
 
   constructor(
@@ -43,7 +46,7 @@ export class Panel {
   private build() {
     const r = this.root;
     r.innerHTML = '';
-    r.append(el('div', { class: 'brand' }, [el('h1', {}, ['World Gen']), el('span', {}, ['M1 · snapshot tectonics'])]));
+    r.append(el('div', { class: 'brand' }, [el('h1', {}, ['World Gen']), el('span', {}, ['M2a · scorecard'])]));
 
     // --- Planet ---
     const planet = section('Planet');
@@ -109,6 +112,14 @@ export class Panel {
     st.append(this.statsEl);
     st.append(el('p', { class: 'note' }, ['Satellite colours are a latitude/elevation preview until the climate model lands.']));
     r.append(st);
+
+    // --- Scorecard ---
+    const sc = section('Scorecard');
+    this.scoreSumEl = el('p', { class: 'score-sum' });
+    this.scoreEl = el('div', { class: 'score' });
+    sc.append(this.scoreSumEl, this.scoreEl);
+    sc.append(el('p', { class: 'note' }, ['Checked against physically plausible ranges; Earth is shown for reference, not as the target. Hover a row for details.']));
+    r.append(sc);
 
     // --- Export ---
     const ex = section('Share & export');
@@ -181,6 +192,26 @@ export class Panel {
     this.statsEl.innerHTML = '';
     for (const [k, v] of rows) this.statsEl.append(el('dt', {}, [k]), el('dd', {}, [v]));
     this.statsEl.title = Object.entries(t).map(([k, v]) => `${k}: ${v} ms`).join('\n');
+  }
+
+  setScore(score: Scorecard | undefined) {
+    this.scoreEl.innerHTML = '';
+    if (!score) {
+      this.scoreSumEl.textContent = '';
+      return;
+    }
+    this.scoreSumEl.innerHTML = `<b class="ok">${score.pass} plausible</b> · <b class="warn">${score.warn} unusual</b> · <b class="fail">${score.fail} impossible</b>`;
+    for (const m of score.metrics) {
+      const row = el('div', { class: `score-row ${m.status}` }, [
+        el('span', { class: 'dot' }),
+        el('span', { class: 'lbl' }, [m.label]),
+        el('span', { class: 'val' }, [m.display]),
+      ]);
+      const tip = [`Plausible: ${m.band}`, `Impossible if: ${m.failIf}`, `Earth: ${m.earth}`];
+      if (m.note) tip.unshift(m.note);
+      row.title = tip.join('\n');
+      this.scoreEl.append(row);
+    }
   }
 
   expectedCells(): number {

@@ -1,5 +1,6 @@
 import type { PlanetParams } from '../core/presets';
 import type { HexGrid } from '../grid/hexgrid';
+import type { Scorecard } from './metrics/scorecard';
 
 /** Crust type per cell. */
 export const Crust = { Ocean: 0, Continent: 1 } as const;
@@ -58,6 +59,8 @@ export interface World {
   /** Elevation relative to sea level, metres. */
   elevation: Float32Array;
   stats: WorldStats;
+  /** Plausibility report (see metrics/scorecard.ts). */
+  score?: Scorecard;
 }
 
 export interface WorldStats {

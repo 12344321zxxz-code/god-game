@@ -1,5 +1,6 @@
 import type { PlanetParams } from '../core/presets';
 import type { MapMode } from '../render/bake';
+import type { Scorecard } from './metrics/scorecard';
 import type { Plate, WorldStats } from './world';
 
 export type WorkerRequest =
@@ -28,6 +29,7 @@ export type WorkerResponse =
       id: number;
       params: PlanetParams;
       stats: WorldStats;
+      score?: Scorecard;
       plates: Plate[];
       cells: CellData;
       width: number;

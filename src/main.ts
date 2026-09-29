@@ -121,6 +121,7 @@ client.onMessage((msg: WorkerResponse) => {
       };
       view.setTextures(msg.rgba, msg.heightMap, msg.width, msg.height, msg.params.radiusKm);
       panel.setStats(msg.stats, msg.params.radiusKm, msg.params.gravity);
+      panel.setScore(msg.score);
       updateArrows();
       updateLegend();
       // If the mode changed while generating, repaint in the new mode.
