@@ -3,6 +3,7 @@ import { randRange, randUnitVec, streamFor, type Rng } from '../../core/rng';
 import type { PlanetParams } from '../../core/presets';
 import type { HexGrid } from '../../grid/hexgrid';
 import { Boundary, Crust, type Plate } from '../world';
+import { M } from '../../core/dmath';
 
 /**
  * M1 "snapshot" tectonics (Gainey / Red Blob style): plates are assigned
@@ -50,7 +51,7 @@ function continentalCrust(grid: HexGrid, params: PlanetParams): Uint8Array {
     // Rejection-sample so cratons don't sit on top of each other.
     let c = randUnitVec(rng);
     for (let tries = 0; tries < 30; tries++) {
-      const ok = cr.every((o) => c[0] * o.c[0] + c[1] * o.c[1] + c[2] * o.c[2] < Math.cos(baseSigma * 1.1));
+      const ok = cr.every((o) => c[0] * o.c[0] + c[1] * o.c[1] + c[2] * o.c[2] < M.cos(baseSigma * 1.1));
       if (ok) break;
       c = randUnitVec(rng);
     }
@@ -63,12 +64,12 @@ function continentalCrust(grid: HexGrid, params: PlanetParams): Uint8Array {
     const wx = x + 0.25 * noise.fbm(x, y, z, 1.7, 3);
     const wy = y + 0.25 * noise.fbm(y + 5.2, z, x, 1.7, 3);
     const wz = z + 0.25 * noise.fbm(z - 3.1, x, y, 1.7, 3);
-    const wl = Math.hypot(wx, wy, wz);
+    const wl = M.hypot(wx, wy, wz);
     let s = 0;
     for (const o of cr) {
       const d = (wx * o.c[0] + wy * o.c[1] + wz * o.c[2]) / wl;
-      const ang = Math.acos(Math.max(-1, Math.min(1, d)));
-      s = Math.max(s, o.w * Math.exp(-((ang / o.s) ** 2)));
+      const ang = M.acos(Math.max(-1, Math.min(1, d)));
+      s = Math.max(s, o.w * M.exp(-((ang / o.s) * (ang / o.s))));
     }
     score[i] = s + 0.28 * noise.fbm(x, y, z, 2.3, 5) + 0.1 * noise.fbm(x, y, z, 7, 3);
   }
@@ -110,7 +111,7 @@ function growPlates(grid: HexGrid, params: PlanetParams, rng: Rng): Uint16Array 
     while (plate[c] !== 0xffff) c = Math.floor(rng() * count);
     plate[c] = p;
     // Skewed growth rates → a mix of large and small plates, like Earth.
-    weight[p] = 0.15 + 0.85 * rng() ** 1.5;
+    weight[p] = 0.15 + 0.85 * M.pow(rng(), 1.5);
     for (let k = nbrOffset[c]; k < nbrOffset[c + 1]; k++) {
       frontierCell.push(nbrs[k]);
       frontierPlate.push(p);
@@ -219,12 +220,12 @@ export function classifyBoundaries(grid: HexGrid, plate: Uint16Array, v: Float32
     if (plate[a] === plate[b]) continue;
     // unit direction a → b
     let dx = pos[3 * b] - pos[3 * a], dy = pos[3 * b + 1] - pos[3 * a + 1], dz = pos[3 * b + 2] - pos[3 * a + 2];
-    const l = Math.hypot(dx, dy, dz);
+    const l = M.hypot(dx, dy, dz);
     dx /= l; dy /= l; dz /= l;
     const rx = v[3 * b] - v[3 * a], ry = v[3 * b + 1] - v[3 * a + 1], rz = v[3 * b + 2] - v[3 * a + 2];
     const along = rx * dx + ry * dy + rz * dz;
     const conv = -along; // > 0 when b moves toward a
-    const shear = Math.hypot(rx - along * dx, ry - along * dy, rz - along * dz);
+    const shear = M.hypot(rx - along * dx, ry - along * dy, rz - along * dz);
     for (const [c, o] of [[a, b], [b, a]]) {
       if (otherPlate[c] < 0 || Math.abs(conv) > best[c]) {
         best[c] = Math.abs(conv);

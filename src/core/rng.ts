@@ -1,3 +1,4 @@
+import { M } from './dmath';
 /**
  * Seeded randomness. Every stage of generation takes its own stream derived
  * from the world seed and a stage label, so changing one stage never shifts
@@ -46,12 +47,12 @@ export function randUnitVec(rng: Rng): [number, number, number] {
   const z = 2 * rng() - 1;
   const t = 2 * Math.PI * rng();
   const r = Math.sqrt(1 - z * z);
-  return [r * Math.cos(t), r * Math.sin(t), z];
+  return [r * M.cos(t), r * M.sin(t), z];
 }
 
 /** Standard normal via Box–Muller. */
 export function randNormal(rng: Rng): number {
   const u = Math.max(1e-12, rng());
   const v = rng();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  return Math.sqrt(-2 * M.log(u)) * M.cos(2 * Math.PI * v);
 }

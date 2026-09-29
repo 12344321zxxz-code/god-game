@@ -6,6 +6,7 @@ import { loadTecto, P, PARAM_COUNT, type TectoOutput, type TectoStats } from '..
 import { buildElevation, smoothField } from '../terrain/elevation';
 import { Crust, Orogeny, type Plate } from '../world';
 import { areaQuantile, classifyBoundaries, hslToRgb, runSnapshotTectonics } from './snapshot';
+import { M } from '../../core/dmath';
 
 /**
  * M2b drift tectonics. The M1 snapshot supplies the starting plates and
@@ -88,13 +89,13 @@ export async function runDrift(grid: HexGrid, params: PlanetParams, progress: Dr
 
   // --- run the engine -------------------------------------------------------
   const prm = new Float64Array(PARAM_COUNT);
-  const areaScale = (params.radiusKm / 6371) ** 2;
+  const areaScale = (params.radiusKm / 6371) * (params.radiusKm / 6371);
   prm[P.radius] = params.radiusKm;
   prm[P.gravity] = params.gravity;
   prm[P.seed] = hashString(params.seed);
   prm[P.meanSpeed] = params.mantleSpeed;
   prm[P.minPlates] = Math.max(3, Math.round(params.plates * 0.5));
-  prm[P.maxPlates] = Math.max(6, Math.round(params.plates * 1.75));
+  prm[P.maxPlates] = Math.max(6, Math.round(params.plates * 1.5));
   prm[P.hotspots] = Math.max(2, Math.round(40 * areaScale));
   prm[P.riftRate] = 1;
   prm[P.erosion] = 1;
@@ -116,7 +117,7 @@ export async function runDrift(grid: HexGrid, params: PlanetParams, progress: Dr
       await new Promise((r) => setTimeout(r, 0));
       if (LOG && Math.round(t) % 50 === 0) {
         const s = tecto.output().stats;
-        console.log(`t=${t.toFixed(0)} plates=${s.plates} cont=${s.contFraction.toFixed(3)}/${s.contVisible.toFixed(3)} arc+${s.convArc.toFixed(2)} hot+${s.convHot.toFixed(2)} copy+${s.copyCont.toFixed(2)} lost-${s.contLost.toFixed(2)} sea=${s.seaLevelKm.toFixed(2)} sub=${s.subductedSr.toFixed(1)} new=${s.createdSr.toFixed(1)} eroded=${s.erodedSrKm.toFixed(2)} H=${s.meanContThick.toFixed(1)} budget=[${s.budget.map((b) => b.toFixed(1)).join(' ')}] rifts=${s.rifts} merges=${s.merges} inits=${s.subductionStarts} steps=${s.steps}`);
+        console.log(`t=${t.toFixed(0)} plates=${s.plates} cont=${s.contFraction.toFixed(3)} sea=${s.seaLevelKm.toFixed(2)} sub=${s.subductedSr.toFixed(1)} new=${s.createdSr.toFixed(1)} eroded=${s.erodedSrKm.toFixed(2)} H=${s.meanContThick.toFixed(1)} budget=[${s.budget.map((b) => b.toFixed(1)).join(' ')}] rifts=${s.rifts} merges=${s.merges} inits=${s.subductionStarts} steps=${s.steps}`);
       }
     }
     out = tecto.output();
@@ -130,7 +131,7 @@ function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftRes
   const n = grid.count;
   const R = params.radiusKm;
   const plates: Plate[] = out.plates.map((p, i) => {
-    const w = Math.hypot(...p.omega);
+    const w = M.hypot(...p.omega);
     const cf = p.area > 0 ? p.contArea / p.area : 0;
     const hue = (p.id * 0.61803398875) % 1;
     return {
@@ -174,7 +175,7 @@ function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftRes
     // sub-cell texture: rugged in mountains, gentle elsewhere, abyssal hills at sea
     if (e > 800) e += (e - 400) * 0.22 * (noise.ridged(x, y, z, 24, 4) - 0.45);
     else if (e > 0) e += 90 * noise.fbm(x, y, z, 20, 4);
-    else if (!out.cont[c]) e += (80 + 150 * Math.exp(-Math.max(0, out.age[c]) / 30)) * noise.fbm(x, y, z, 30, 3);
+    else if (!out.cont[c]) e += (80 + 150 * M.exp(-Math.max(0, out.age[c]) / 30)) * noise.fbm(x, y, z, 30, 3);
     if (e > 0) e = softCap(e, cap);
     elevation[c] = e;
     if (e > 0) land += grid.area[c];
@@ -201,5 +202,5 @@ function softCap(e: number, cap: number): number {
   const knee = 0.7 * cap;
   if (e <= knee) return e;
   const room = cap - knee;
-  return knee + room * (1 - Math.exp(-(e - knee) / room));
+  return knee + room * (1 - M.exp(-(e - knee) / room));
 }

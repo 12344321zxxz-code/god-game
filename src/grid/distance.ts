@@ -1,5 +1,6 @@
 import { MinHeap } from '../core/heap';
 import type { HexGrid } from './hexgrid';
+import { M } from '../core/dmath';
 
 export interface DistanceField {
   /** Great-circle distance in km to the nearest source (Infinity if unreached). */
@@ -41,7 +42,7 @@ export function distanceField(
       const n = nbrs[k];
       if (group && group[n] !== group[c]) continue;
       const dot = cx * pos[3 * n] + cy * pos[3 * n + 1] + cz * pos[3 * n + 2];
-      const nd = d0 + Math.acos(dot > 1 ? 1 : dot) * radiusKm;
+      const nd = d0 + M.acos(dot > 1 ? 1 : dot) * radiusKm;
       if (nd < dist[n] && nd <= maxKm) {
         dist[n] = nd;
         source[n] = source[c];

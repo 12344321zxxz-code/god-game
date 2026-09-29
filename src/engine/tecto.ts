@@ -1,4 +1,5 @@
 import type { HexGrid } from '../grid/hexgrid';
+import { useDeterministicMath, type MathExports } from '../core/dmath';
 import { TECTO_WASM_BASE64 } from './tecto-wasm';
 
 /**
@@ -7,7 +8,7 @@ import { TECTO_WASM_BASE64 } from './tecto-wasm';
  * outputs are read back through pointers and copied out.
  */
 
-interface TectoExports {
+interface TectoExports extends MathExports {
   memory: WebAssembly.Memory;
   alloc(bytes: number): number;
   dealloc(ptr: number, bytes: number): void;
@@ -100,6 +101,14 @@ function wasmBytes(): Uint8Array<ArrayBuffer> {
   return out;
 }
 
+let mathReady: Promise<void> | undefined;
+
+/** Routes generation maths (`M.*`) through the engine's deterministic libm. */
+export function initDeterministicMath(): Promise<void> {
+  mathReady ??= loadTecto().then((t) => useDeterministicMath(t.exports));
+  return mathReady;
+}
+
 /** Compiles (once) and instantiates a fresh engine instance. */
 export async function loadTecto(): Promise<Tecto> {
   compiled ??= WebAssembly.compile(wasmBytes());
@@ -113,6 +122,10 @@ export class Tecto {
   private sim = 0;
   private n = 0;
   constructor(private ex: TectoExports) {}
+
+  get exports(): TectoExports {
+    return this.ex;
+  }
 
   private put(a: Typed): number {
     const p = this.ex.alloc(a.byteLength);

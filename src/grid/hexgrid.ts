@@ -1,3 +1,4 @@
+import { M } from '../core/dmath';
 /**
  * Goldberg hex-sphere grid.
  *
@@ -42,7 +43,7 @@ function icosahedron(): { v: number[][]; f: number[][] } {
     [PHI, 0, -1], [PHI, 0, 1], [-PHI, 0, -1], [-PHI, 0, 1],
   ];
   const v = raw.map(([x, y, z]) => {
-    const l = Math.hypot(x, y, z);
+    const l = M.hypot(x, y, z);
     return [x / l, y / l, z / l];
   });
   const f = [
@@ -56,14 +57,14 @@ function icosahedron(): { v: number[][]; f: number[][] } {
 
 function slerp(a: number[], b: number[], t: number, out: number[]): number[] {
   const d = Math.min(1, Math.max(-1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
-  const th = Math.acos(d);
+  const th = M.acos(d);
   if (th < 1e-9) {
     out[0] = a[0]; out[1] = a[1]; out[2] = a[2];
     return out;
   }
-  const s = Math.sin(th);
-  const wa = Math.sin((1 - t) * th) / s;
-  const wb = Math.sin(t * th) / s;
+  const s = M.sin(th);
+  const wa = M.sin((1 - t) * th) / s;
+  const wb = M.sin(t * th) / s;
   out[0] = wa * a[0] + wb * b[0];
   out[1] = wa * a[1] + wb * b[1];
   out[2] = wa * a[2] + wb * b[2];
@@ -232,7 +233,7 @@ function relax(pos: Float64Array, off: Uint32Array, nbrs: Uint32Array, count: nu
     x = 0.5 * pos[3 * c] + (0.5 * x) / (k1 - k0);
     y = 0.5 * pos[3 * c + 1] + (0.5 * y) / (k1 - k0);
     z = 0.5 * pos[3 * c + 2] + (0.5 * z) / (k1 - k0);
-    const l = Math.hypot(x, y, z);
+    const l = M.hypot(x, y, z);
     next[3 * c] = x / l; next[3 * c + 1] = y / l; next[3 * c + 2] = z / l;
   }
   pos.set(next);
@@ -240,7 +241,7 @@ function relax(pos: Float64Array, off: Uint32Array, nbrs: Uint32Array, count: nu
 
 export function angleBetween(pos: Float64Array, a: number, b: number): number {
   const d = pos[3 * a] * pos[3 * b] + pos[3 * a + 1] * pos[3 * b + 1] + pos[3 * a + 2] * pos[3 * b + 2];
-  return Math.acos(Math.min(1, Math.max(-1, d)));
+  return M.acos(Math.min(1, Math.max(-1, d)));
 }
 
 /** Area of a spherical triangle on the unit sphere (Van Oosterom–Strackee). */
@@ -252,7 +253,7 @@ function sphericalTriangleArea(pos: Float64Array, a: number, b: number, c: numbe
   const ab = ax * bx + ay * by + az * bz;
   const bc = bx * cx + by * cy + bz * cz;
   const ca = cx * ax + cy * ay + cz * az;
-  return 2 * Math.abs(Math.atan2(triple, 1 + ab + bc + ca));
+  return 2 * Math.abs(M.atan2(triple, 1 + ab + bc + ca));
 }
 
 /** Mean spacing between neighbouring cell centres, in km, for a planet radius. */

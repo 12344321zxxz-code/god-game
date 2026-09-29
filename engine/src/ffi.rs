@@ -127,3 +127,32 @@ pub extern "C" fn sim_layout(which: u32) -> u32 {
 pub unsafe extern "C" fn sim_free(sim: *mut Sim) {
     drop(unsafe { Box::from_raw(sim) });
 }
+
+// ---------------------------------------------------------------------------
+// Deterministic transcendental functions. JS engines are free to implement
+// Math.sin/exp/… differently (Node 22 and Chrome 141 disagree in the last
+// bits), which chaos in the simulation amplifies into different planets.
+// The TypeScript side routes its generation maths through these, so a seed
+// gives the same world in every browser.
+
+macro_rules! unary {
+    ($($name:ident => $f:ident),* $(,)?) => {
+        $(
+            #[unsafe(no_mangle)]
+            pub extern "C" fn $name(x: f64) -> f64 {
+                x.$f()
+            }
+        )*
+    };
+}
+unary!(m_exp => exp, m_log => ln, m_sin => sin, m_cos => cos, m_tan => tan, m_acos => acos, m_asin => asin, m_atan => atan, m_cbrt => cbrt, m_tanh => tanh);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn m_atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn m_pow(x: f64, y: f64) -> f64 {
+    x.powf(y)
+}

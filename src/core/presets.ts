@@ -57,9 +57,9 @@ export function cellCount(freq: number): number {
 }
 
 const BASE: Record<Exclude<PresetId, 'custom'>, Omit<PlanetParams, 'seed' | 'preset'>> = {
-  earth: { radiusKm: 6371, gravity: 1, gridFreq: 128, plates: 12, continents: 9, landFraction: 0.29, tiltDeg: 23.5, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
-  mars: { radiusKm: 3390, gravity: 0.378, gridFreq: 90, plates: 6, continents: 4, landFraction: 0.29, tiltDeg: 25.2, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
-  moon: { radiusKm: 1737, gravity: 0.165, gridFreq: 90, plates: 6, continents: 3, landFraction: 0.29, tiltDeg: 1.5, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
+  earth: { radiusKm: 6371, gravity: 1, gridFreq: 128, plates: 12, continents: 9, landFraction: 0.29, tiltDeg: 23.5, engine: 'drift', simMyr: 500, mantleSpeed: 35 },
+  mars: { radiusKm: 3390, gravity: 0.378, gridFreq: 90, plates: 6, continents: 4, landFraction: 0.29, tiltDeg: 25.2, engine: 'drift', simMyr: 500, mantleSpeed: 35 },
+  moon: { radiusKm: 1737, gravity: 0.165, gridFreq: 90, plates: 6, continents: 3, landFraction: 0.29, tiltDeg: 1.5, engine: 'drift', simMyr: 500, mantleSpeed: 35 },
 };
 
 export function presetParams(preset: Exclude<PresetId, 'custom'>, seed: string): PlanetParams {

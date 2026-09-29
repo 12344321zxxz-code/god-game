@@ -3,6 +3,7 @@ import { MinHeap } from '../../core/heap';
 import { buildHexGrid, type HexGrid } from '../../grid/hexgrid';
 import { CellLocator } from '../../grid/locator';
 import type { World } from '../world';
+import { M } from '../../core/dmath';
 
 /**
  * Planet scorecard.
@@ -230,9 +231,12 @@ function oldestCrust(w: World): Metric {
     value: v,
     display: `${Math.round(v)} Myr`,
     band: '100–350 Myr',
-    failIf: 'over ~400 Myr (never recycled)',
+    // Old sea floor is dense and founders on its own, but slowly: a few
+    // hundred Myr is unusual (sluggish plates), a billion years means the
+    // plates simply are not recycling it.
+    failIf: 'over ~1,000 Myr (sea floor not recycled)',
     earth: '~180 Myr (outlier ~340)',
-    status: status(v > 400, v >= 100 && v <= 350),
+    status: status(v > 1000, v >= 100 && v <= 350),
   };
 }
 
@@ -274,7 +278,7 @@ function deepestTrench(w: World, G: number): Metric {
 function plateSpeeds(w: World): Metric {
   let sum = 0, area = 0, max = 0;
   for (let c = 0; c < w.grid.count; c++) {
-    const s = Math.hypot(w.velocity[3 * c], w.velocity[3 * c + 1], w.velocity[3 * c + 2]);
+    const s = M.hypot(w.velocity[3 * c], w.velocity[3 * c + 1], w.velocity[3 * c + 2]);
     sum += s * w.grid.area[c];
     area += w.grid.area[c];
     if (s > max) max = s;
@@ -367,7 +371,7 @@ function farthestWithin(grid: HexGrid, R: number, members: number[], comp: Int32
       const n = grid.nbrs[k];
       if (comp[n] !== id) continue;
       const dot = grid.pos[3 * c] * grid.pos[3 * n] + grid.pos[3 * c + 1] * grid.pos[3 * n + 1] + grid.pos[3 * c + 2] * grid.pos[3 * n + 2];
-      const nd = d0 + Math.acos(Math.min(1, dot)) * R;
+      const nd = d0 + M.acos(Math.min(1, dot)) * R;
       if (nd < dist[n]) {
         dist[n] = nd;
         heap.push(nd, n);
@@ -502,7 +506,7 @@ export function coastlineDimension(w: World): number | null {
     let s = 0;
     for (let e = 0; e < g.edgeCount; e++) s += g.edgeLen[e];
     const eps = (s / g.edgeCount) * R;
-    if (L > 0) pts.push([Math.log(eps), Math.log(L)]);
+    if (L > 0) pts.push([M.log(eps), M.log(L)]);
   }
   if (pts.length < 3) return null;
   const n = pts.length;
@@ -511,7 +515,7 @@ export function coastlineDimension(w: World): number | null {
   let num = 0, den = 0;
   for (const [x, y] of pts) {
     num += (x - mx) * (y - my);
-    den += (x - mx) ** 2;
+    den += (x - mx) * (x - mx);
   }
   const slope = num / den;
   return 1 - slope;

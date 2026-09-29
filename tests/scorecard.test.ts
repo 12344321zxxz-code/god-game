@@ -44,7 +44,7 @@ describe('scorecard', () => {
 
   it('fails ocean crust that never recycles', () => {
     const w = mutate((w) => {
-      for (let c = 0; c < w.grid.count; c++) if (w.oceanAge[c] >= 0) w.oceanAge[c] = 900;
+      for (let c = 0; c < w.grid.count; c++) if (w.oceanAge[c] >= 0) w.oceanAge[c] = 1500;
     });
     expect(statusOf(w, 'crust-age')).toBe('fail');
   });

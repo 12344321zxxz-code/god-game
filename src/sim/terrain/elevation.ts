@@ -4,6 +4,7 @@ import { distanceField } from '../../grid/distance';
 import { meanSpacingKm, type HexGrid } from '../../grid/hexgrid';
 import { areaQuantile, type TectonicSnapshot } from '../tectonics/snapshot';
 import { Boundary, Crust, Orogeny } from '../world';
+import { M } from '../../core/dmath';
 
 /**
  * Height pass. Turns crust type, crust age and boundary history into
@@ -141,7 +142,7 @@ export function buildElevation(grid: HexGrid, params: PlanetParams, t: TectonicS
       const w = smoothstep(0, 250, coast.dist[c]);
       e = lerp(-250, floor, w);
       // abyssal hills, stronger on young crust
-      e += (120 + 180 * Math.exp(-age / 30)) * noise.fbm(x, y, z, 30, 3);
+      e += (120 + 180 * M.exp(-age / 30)) * noise.fbm(x, y, z, 30, 3);
     } else {
       oceanAge[c] = -1;
       const inland = coast.dist[c];
@@ -199,7 +200,7 @@ export function buildElevation(grid: HexGrid, params: PlanetParams, t: TectonicS
         }
         case ROLE_TRENCH: {
           if (isCont) break;
-          const depth = (2200 + 2800 * s) * Math.exp(-((d / 55) ** 2)) * Math.min(G, 1.5);
+          const depth = (2200 + 2800 * s) * M.exp(-(d / 55) * (d / 55)) * Math.min(G, 1.5);
           if (depth > 1000) orogeny[c] = Orogeny.Trench;
           e -= depth;
           break;
@@ -209,7 +210,7 @@ export function buildElevation(grid: HexGrid, params: PlanetParams, t: TectonicS
     // Continental rifts: a sunken valley with raised shoulders
     if (crust[c] === Crust.Continent && div.source[c] >= 0 && div.dist[c] < 400) {
       const d = div.dist[c];
-      e += (-1100 * Math.exp(-((d / 45) ** 2)) + 900 * Math.exp(-(((d - 110) / 60) ** 2))) * G;
+      e += (-1100 * M.exp(-(d / 45) * (d / 45)) + 900 * M.exp(-((d - 110) / 60) * ((d - 110) / 60))) * G;
       if (d < 60) orogeny[c] = Orogeny.Rift;
     }
     // Rugged texture scaled by how mountainous the cell is (added after smoothing)
@@ -271,7 +272,7 @@ function softCap(e: number, cap: number): number {
   if (e <= knee) return e;
   const over = e - knee;
   const room = cap - knee;
-  return knee + room * (1 - Math.exp(-over / room));
+  return knee + room * (1 - M.exp(-over / room));
 }
 
 function smoothstep(a: number, b: number, x: number): number {

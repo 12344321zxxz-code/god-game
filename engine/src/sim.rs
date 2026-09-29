@@ -32,7 +32,7 @@ use crate::params::Params;
 use crate::plate::{EMPTY, Plate};
 use crate::rng::{Noise, Rng};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap};
 
 const NONE: u32 = u32::MAX;
 const TAU: f64 = 4.0 * std::f64::consts::PI;
@@ -56,7 +56,9 @@ pub const OCEAN_THICK: f32 = 7.0;
 const CONT_MIN: f32 = 12.0;
 /// Arc / plateau crust thicker than this is buoyant and joins the continents.
 const ARC_TO_CONT: f32 = 22.0;
-const MAX_THICK: f32 = 95.0;
+/// Thickest crust the lithosphere can hold up at 1 g (km); weaker gravity
+/// supports more (∝ √(g⊕/g), so Mars-size worlds reach ~130 km).
+const MAX_THICK_EARTH: f32 = 95.0;
 
 // ---- force constants (relative; overall speed is normalised) ----
 const K_SLAB: f64 = 1.0;
@@ -64,6 +66,10 @@ const K_GPE: f64 = 0.012;
 const K_COLL: f64 = 30.0;
 /// Basal drag weight of continental lithosphere relative to oceanic (deep keels).
 const DRAG_CONT: f64 = 3.0;
+/// Sea floor older than this (Myr) starts to founder at plate edges.
+const FOUNDER_AGE: f32 = 160.0;
+/// Clock (Myr) of the slow surface processes (uplift, flow, erosion, hot spots).
+const PROC_DT: f64 = 1.0;
 /// Relative speed (mm/yr) below which a boundary neither consumes nor makes crust.
 const MIN_RATE: f64 = 3.0;
 /// Hard cap on any plate's speed, mm/yr.
@@ -74,6 +80,21 @@ const DEPTH_TABLE: [(f64, f64); 16] = [
     (0., 2600.), (10., 3707.), (20., 4165.), (30., 4494.), (40., 4775.), (50., 5014.), (100., 5775.), (150., 6118.),
     (200., 6273.), (250., 6343.), (300., 6374.), (350., 6388.), (400., 6395.), (450., 6398.), (500., 6399.), (600., 6400.),
 ];
+
+const DEPTH_LUT_N: usize = 1024;
+/// √age step of the depth lookup table (covers 0–625 Myr).
+const DEPTH_LUT_STEP: f64 = 25.0 / DEPTH_LUT_N as f64;
+static DEPTH_LUT: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+
+/// Fast table version of `ocean_depth` (m).
+#[inline]
+pub fn ocean_depth_fast(t: f32) -> f32 {
+    let lut = DEPTH_LUT.get_or_init(|| (0..=DEPTH_LUT_N + 1).map(|i| ocean_depth((i as f64 * DEPTH_LUT_STEP).powi(2)) as f32).collect());
+    let x = t.max(0.0).sqrt() / DEPTH_LUT_STEP as f32;
+    let i = (x as usize).min(DEPTH_LUT_N);
+    let f = (x - i as f32).min(1.0);
+    lut[i] + (lut[i + 1] - lut[i]) * f
+}
 
 /// Ocean depth (positive m) for crust age, interpolated in √age.
 pub fn ocean_depth(t: f64) -> f64 {
@@ -99,7 +120,7 @@ pub fn crust_elev(thick: f32, age: f32, cont: u8) -> f64 {
         let e = 0.1515 * thick as f64 - 4.7;
         if e < 0.0 { e * 1.45 } else { e }
     } else {
-        -ocean_depth(age as f64) / 1000.0 + (thick as f64 - OCEAN_THICK as f64) * 0.3
+        -ocean_depth_fast(age) as f64 / 1000.0 + (thick as f64 - OCEAN_THICK as f64) * 0.3
     }
 }
 
@@ -146,6 +167,8 @@ pub struct Stats {
     /// Continental crust volume budget (sr·km): subduction, rift, hot spot,
     /// erosion, deposition, collision stacking, flow.
     pub budget: [f64; 7],
+    /// Debug: edge-gated removals, deep removals, ridge creations, donorless creations (sr).
+    pub diag: [f64; 4],
 }
 
 /// Multi-source Dijkstra over the grid with reusable buffers.
@@ -223,6 +246,7 @@ pub struct Sim {
     mark: Vec<u32>,
     stamp: u32,
     hint: Vec<u32>,
+    level: Vec<u8>,
     stack: Vec<u32>,
 
     // resolved world view (valid after `coverage` + `fill_gaps`)
@@ -255,7 +279,7 @@ pub struct Sim {
     cz_top: Vec<u32>,
     hotspots: Vec<Hotspot>,
     mantle: Vec<MantleCell>,
-    pair_coll: HashMap<(u32, u32), f64>,
+    pair_coll: BTreeMap<(u32, u32), f64>,
 
     dij: Dijkstra,
     order: Vec<u32>,
@@ -263,6 +287,10 @@ pub struct Sim {
     work: Vec<f32>,
     pub sea_level: f64,
     pub stats: Stats,
+    proc_acc: f64,
+    max_thick: f32,
+    /// Seconds spent per stage (native builds only).
+    pub prof: [f64; 13],
     next_check: f64,
 
     // outputs
@@ -278,6 +306,7 @@ pub const STAT_FIELDS: usize = 32;
 impl Sim {
     pub fn new(g: Grid, prm: Params) -> Sim {
         let n = g.n;
+        let max_thick = 35.0 + (MAX_THICK_EARTH - 35.0) * (prm.relief() as f32).sqrt();
         let seed = prm.seed;
         Sim {
             rng: Rng::stream(seed, "drift"),
@@ -293,6 +322,7 @@ impl Sim {
             mark: vec![0; n],
             stamp: 0,
             hint: vec![0; n],
+            level: vec![0; n],
             stack: vec![],
             owner: vec![-1; n],
             oslot: vec![0; n],
@@ -319,13 +349,16 @@ impl Sim {
             cz_top: vec![NONE; n],
             hotspots: vec![],
             mantle: vec![],
-            pair_coll: HashMap::new(),
+            pair_coll: BTreeMap::new(),
             dij: Dijkstra::new(n),
             order: (0..n as u32).collect(),
             carry: vec![0.0; n],
             work: vec![0.0; n],
             sea_level: 0.0,
             stats: Stats::default(),
+            prof: [0.0; 13],
+            proc_acc: 0.0,
+            max_thick,
             next_check: 10.0,
             out_owner: vec![0; n],
             out_oro: vec![0; n],
@@ -427,22 +460,45 @@ impl Sim {
             p.advance(dt);
             p.age_myr += dt;
         }
-        self.coverage();
-        self.local_pass(dt);
-        self.fill_gaps(dt);
-        self.gather_world();
+        macro_rules! timed {
+            ($i:expr, $e:expr) => {{
+                #[cfg(not(target_arch = "wasm32"))]
+                let t0 = std::time::Instant::now();
+                $e;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.prof[$i] += t0.elapsed().as_secs_f64();
+                }
+            }};
+        }
+        timed!(0, self.coverage());
+        timed!(1, self.local_pass(dt));
+        timed!(2, self.fill_gaps(dt));
+        timed!(3, self.gather_world());
         self.dthick.fill(0.0);
         self.oro_set.fill(0);
-        self.subduction(dt);
-        self.collision_marks();
-        self.rift_thinning();
-        self.hotspots_step(dt);
-        self.crustal_flow(dt);
-        self.erosion(dt);
-        self.apply_deltas(dt);
-        self.update_bounds();
-        self.forces(dt);
-        self.events(dt);
+        // Slow surface processes run on a ~1 Myr clock (several motion
+        // steps at high resolution) with the time accumulated since.
+        self.proc_acc += dt;
+        let run_proc = self.proc_acc >= PROC_DT;
+        let pdt = self.proc_acc;
+        if run_proc {
+            self.proc_acc = 0.0;
+            timed!(4, self.subduction(pdt));
+        }
+        timed!(5, self.collision_marks());
+        timed!(5, self.rift_thinning());
+        if run_proc {
+            timed!(6, self.hotspots_step(pdt));
+            timed!(7, self.crustal_flow(pdt));
+            timed!(8, self.erosion(pdt));
+        }
+        timed!(9, self.apply_deltas(dt));
+        timed!(10, self.update_bounds());
+        if run_proc {
+            timed!(11, self.forces(pdt));
+        }
+        timed!(12, self.events(dt));
         for c in 0..self.g.n {
             self.prev_owner[c] = self.owner_id[c];
         }
@@ -506,37 +562,53 @@ impl Sim {
     fn coverage(&mut self) {
         let n = self.g.n;
         self.cand_n.fill(0);
+        // Each plate floods out from where its columns were last step: cells
+        // where it has crust keep spreading, misses spread at most two rings.
         for pi in 0..self.plates.len() {
             let p = &self.plates[pi];
             let qi = p.q.conj();
-            let cen = p.q.rotate(p.cen);
             self.stamp = self.stamp.wrapping_add(1);
             if self.stamp == 0 {
                 self.mark.fill(0);
                 self.stamp = 1;
             }
             let st = self.stamp;
-            let seed = self.g.nearest(cen);
             self.stack.clear();
-            self.stack.push(seed as u32);
-            self.mark[seed] = st;
-            self.hint[seed] = self.g.nearest(qi.rotate(self.g.pos[seed])) as u32;
+            for s in 0..p.cell.len() {
+                if !p.alive[s] {
+                    continue;
+                }
+                let c = p.world[s] as usize;
+                if self.mark[c] != st {
+                    self.mark[c] = st;
+                    self.hint[c] = p.cell[s];
+                    self.level[c] = 0;
+                    self.stack.push(c as u32);
+                }
+            }
             while let Some(c) = self.stack.pop() {
                 let c = c as usize;
-                let r = self.hint[c] as usize;
+                let r = self.g.nearest_from(qi.rotate(self.g.pos[c]), self.hint[c] as usize);
                 let s = p.slot_of[r];
-                if s != EMPTY {
+                let lvl = if s != EMPTY {
                     let k = self.cand_n[c] as usize;
                     if k < 4 {
                         self.cand[4 * c + k] = (pi as u32, s as u32);
                         self.cand_n[c] += 1;
                     }
+                    0
+                } else {
+                    self.level[c] + 1
+                };
+                if lvl > 2 {
+                    continue;
                 }
                 for &d in self.g.nb(c) {
                     let d = d as usize;
-                    if self.mark[d] != st && dot(self.g.pos[d], cen) >= p.cos_r {
+                    if self.mark[d] != st {
                         self.mark[d] = st;
-                        self.hint[d] = self.g.nearest_from(qi.rotate(self.g.pos[d]), r) as u32;
+                        self.hint[d] = r as u32;
+                        self.level[d] = lvl;
                         self.stack.push(d as u32);
                     }
                 }
@@ -678,6 +750,9 @@ impl Sim {
                     if conv < MIN_RATE {
                         continue; // not converging: stays hidden (rounding overlap)
                     }
+                    self.stats.diag[0] += g.area[c];
+                } else {
+                    self.stats.diag[1] += g.area[c];
                 }
                 if p.cont[s] != 0 {
                     if self.cont_w[c] == 0 {
@@ -706,7 +781,7 @@ impl Sim {
             let ts = ts as usize;
             if p.alive[ts] {
                 let before = p.thick[ts];
-                p.thick[ts] = (p.thick[ts] + add).min(MAX_THICK);
+                p.thick[ts] = (p.thick[ts] + add).min(self.max_thick);
                 self.stats.budget[5] += (p.thick[ts] - before) as f64 * self.g.area[p.cell[ts] as usize];
                 p.oro[ts] = oro::HIMALAYAN;
                 p.oro_age[ts] = 0.0;
@@ -779,6 +854,7 @@ impl Sim {
                     p.slot_of[r] as usize
                 } else if ridge || donor.is_none() {
                     self.stats.created_area += self.g.area[c];
+                    self.stats.diag[if ridge { 2 } else { 3 }] += self.g.area[c];
                     p.add(r, c, OCEAN_THICK, 0.0, 0, oro::NONE, 1000.0)
                 } else if enclosed {
                     let ds = self.oslot[donor.unwrap()] as usize;
@@ -908,7 +984,7 @@ impl Sim {
             let owner = &self.owner;
             let src_owner: Vec<i32> = sources.iter().map(|&c| owner[c as usize]).collect();
             self.dij.run(&self.g, rk, &sources, 1150.0, |d, si| owner[d] == src_owner[si]);
-            let tmax = 35.0 + 40.0 * relief;
+            let tmax = 35.0 + 40.0 * relief.sqrt();
             // Cordillera growth is mostly shortening: crust is moved toward the
             // arc from the back-arc / foreland, so that share is taken from a
             // band 450–1100 km inland (foreland basins) — only the magmatic
@@ -920,7 +996,7 @@ impl Sim {
                 let x = self.dij.dist[d] as f64;
                 if self.cont_w[d] != 0 && x > 450.0 {
                     let h = (self.thick_w[d] + self.dthick[d]) as f64;
-                    band += smoothstep(450.0, 600.0, x) * (1.0 - smoothstep(900.0, 1100.0, x)) * (h - 30.0).max(0.0) * self.g.area[d];
+                    band += smoothstep(450.0, 600.0, x) * (1.0 - smoothstep(900.0, 1100.0, x)) * (h - 34.0).max(0.0) * self.g.area[d];
                 }
             }
             for &d in &self.dij.touched {
@@ -955,7 +1031,8 @@ impl Sim {
                 }
             }
             if band > 0.0 && shortened > 0.0 {
-                let f = (shortened / band).min(0.5);
+                // never strip the back-arc below normal thickness in one go
+                let f = (shortened / band).min(0.15);
                 let mut taken = 0.0;
                 for &d in &self.dij.touched {
                     let d = d as usize;
@@ -964,7 +1041,7 @@ impl Sim {
                         continue;
                     }
                     let h = (self.thick_w[d] + self.dthick[d]) as f64;
-                    let w = smoothstep(450.0, 600.0, x) * (1.0 - smoothstep(900.0, 1100.0, x)) * (h - 30.0).max(0.0);
+                    let w = smoothstep(450.0, 600.0, x) * (1.0 - smoothstep(900.0, 1100.0, x)) * (h - 34.0).max(0.0);
                     self.dthick[d] -= (f * w) as f32;
                     taken += f * w * self.g.area[d];
                 }
@@ -1150,7 +1227,7 @@ impl Sim {
             })
             .collect();
         if !active.is_empty() {
-            let kmax = k_ch * phi(MAX_THICK);
+            let kmax = k_ch * phi(self.max_thick);
             let nsub = ((dt * kmax * w0 * 6.0) / 0.45).ceil().clamp(1.0, 400.0) as usize;
             let sdt = dt / nsub as f64;
             for _ in 0..nsub {
@@ -1188,8 +1265,15 @@ impl Sim {
         let n = self.g.n;
         self.compute_elev();
         // sea level: the land-fraction quantile (the TS finish uses the same rule)
+        // descending elevation; the order barely changes step to step, so an
+        // adaptive stable sort over last step's order is nearly linear
         let elev = &self.elev;
-        self.order.sort_unstable_by(|&a, &b| elev[b as usize].partial_cmp(&elev[a as usize]).unwrap_or(std::cmp::Ordering::Equal));
+        let key = |c: u32| {
+            let b = elev[c as usize].to_bits();
+            let k = if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 };
+            !k
+        };
+        self.order.sort_by_key(|&c| key(c));
         let goal = self.prm.land_fraction * TAU;
         let mut acc = 0.0;
         let mut sea = elev[self.order[n - 1] as usize] as f64;
@@ -1292,7 +1376,7 @@ impl Sim {
                     p.cont[s] = 1;
                     self.stats.conv_hot += 0.0;
                 }
-                p.thick[s] = p.thick[s].clamp(3.0, MAX_THICK);
+                p.thick[s] = p.thick[s].clamp(3.0, self.max_thick);
             }
         }
     }
@@ -1330,7 +1414,9 @@ impl Sim {
             let w = if self.cont_w[c] != 0 { DRAG_CONT } else { 1.0 };
             let mut om = [0.0; 3];
             for mc in &self.mantle {
-                let g = (-(angle(p, mc.centre) / MANTLE_CELL_RADIUS).powi(2)).exp();
+                // Gaussian in chord distance (≈ angle for the sizes used)
+                let d2 = 2.0 - 2.0 * dot(p, mc.centre);
+                let g = (-d2 / (MANTLE_CELL_RADIUS * MANTLE_CELL_RADIUS)).exp();
                 om = add(om, scale(mc.omega, g));
             }
             for i in 0..3 {
@@ -1357,6 +1443,25 @@ impl Sim {
             if cnt > 0 {
                 let f = scale(tangent(grad, p), -K_GPE * a * 2.0 / self.g.nb(c).len() as f64);
                 tq[o] = add(tq[o], cross(p, f));
+            }
+        }
+        // Old sea floor is gravitationally unstable: where it borders younger
+        // or continental crust of another plate it starts to sink on its own
+        // (spontaneous subduction initiation), seeding a slab that then pulls.
+        for c in 0..n {
+            let o = self.owner[c];
+            if o < 0 || self.cont_w[c] != 0 || self.age_w[c] < FOUNDER_AGE {
+                continue;
+            }
+            let age = self.age_w[c];
+            let younger_neighbour = self.g.nb(c).iter().any(|&d| {
+                let d = d as usize;
+                self.owner[d] >= 0 && self.owner[d] != o && (self.cont_w[d] != 0 || self.age_w[d] + 30.0 < age)
+            });
+            if younger_neighbour {
+                let f = ((age - FOUNDER_AGE) / 100.0).min(1.0) as f64;
+                self.slab[c] += (self.g.area[c] * f * dt / 10.0) as f32;
+                self.slab_pid[c] = self.owner_id[c];
             }
         }
         // slab pull
@@ -1457,9 +1562,11 @@ impl Sim {
     fn events(&mut self, dt: f64) {
         // (1) splits that use the resolved world view (indices still valid)
         if self.time >= self.next_check {
-            self.next_check = self.time + 20.0;
-            for _ in 0..2 {
-                if self.plates.len() < self.prm.max_plates && self.subduction_initiation() {
+            self.next_check = self.time + 25.0;
+            for _ in 0..1 {
+                // physical need beats the plate budget: cleanup merges the
+                // smallest plate away if this pushes the count over the limit
+                if self.subduction_initiation() {
                     self.stats.sub_inits += 1;
                     // the view is stale after a split: refresh before looking again
                     self.coverage();
@@ -1469,7 +1576,7 @@ impl Sim {
             }
         }
         // (2) continental rifting (Poisson; big continents rift more often)
-        if self.plates.len() < self.prm.max_plates {
+        {
             let mut chosen = None;
             for i in 0..self.plates.len() {
                 let p = &self.plates[i];
@@ -1502,7 +1609,8 @@ impl Sim {
         let mut merge = None;
         for (&(a, b), &v) in &self.pair_coll {
             let (Some(ia), Some(ib)) = (self.idx(a), self.idx(b)) else { continue };
-            let thr = (0.08 * self.plates[ia].cont_area.min(self.plates[ib].cont_area)).clamp(0.0015, 0.02);
+            // suture once a good share of the smaller continent has been driven in
+            let thr = (0.3 * self.plates[ia].cont_area.min(self.plates[ib].cont_area)).clamp(0.003, 0.08);
             if v > thr {
                 merge = Some((ia, ib, a, b));
                 break;
@@ -1558,7 +1666,7 @@ impl Sim {
     /// current view; falls back to the nearest plate centre).
     fn main_neighbour(&self, pi: usize) -> Option<usize> {
         let id = self.plates[pi].id;
-        let mut counts: HashMap<u32, u32> = HashMap::new();
+        let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
         for c in 0..self.g.n {
             if self.owner_id[c] != id {
                 continue;
@@ -1587,6 +1695,9 @@ impl Sim {
         if keep == gone {
             return;
         }
+        if std::env::var("TECTO_DEBUG").is_ok() {
+            eprintln!("t={:.0} merge id {} (area {:.3}) into id {} (area {:.3})", self.time, self.plates[gone].id, self.plates[gone].area, self.plates[keep].id, self.plates[keep].area);
+        }
         let b = self.plates.remove(gone);
         let keep = if gone < keep { keep - 1 } else { keep };
         let g = &self.g;
@@ -1606,7 +1717,7 @@ impl Sim {
             } else {
                 let ts = ts as usize;
                 if b.cont[s] != 0 && a.cont[ts] != 0 {
-                    a.thick[ts] = (a.thick[ts] + 0.5 * b.thick[s]).min(MAX_THICK);
+                    a.thick[ts] = (a.thick[ts] + 0.5 * b.thick[s]).min(self.max_thick);
                 } else if b.cont[s] != 0 {
                     a.thick[ts] = b.thick[s];
                     a.cont[ts] = 1;
@@ -1710,6 +1821,9 @@ impl Sim {
         if slots.is_empty() || slots.len() >= p.live {
             return None;
         }
+        if std::env::var("TECTO_DEBUG").is_ok() {
+            eprintln!("t={:.0} split id {} → new id {} ({} of {} slots)", self.time, p.id, self.next_id, slots.len(), p.live);
+        }
         let mut np = Plate::new(self.next_id, self.g.n, p.q, omega);
         for &s in slots {
             if !p.alive[s] {
@@ -1785,7 +1899,9 @@ impl Sim {
                 i += 1;
                 for &d in self.g.nb(c) {
                     let d = d as usize;
-                    if self.mark[d] != st && self.owner[d] == pi as i32 && self.cont_w[d] == 0 && far[d] {
+                    // at a margin the whole connected ocean breaks away, so the
+                    // new boundary runs along the old continental edge
+                    if self.mark[d] != st && self.owner[d] == pi as i32 && self.cont_w[d] == 0 && (margin || far[d]) {
                         self.mark[d] = st;
                         comp.push(d as u32);
                     }
@@ -1796,10 +1912,10 @@ impl Sim {
             if std::env::var("TECTO_DEBUG").is_ok() {
                 eprintln!("t={:.0} init? plate {} margin {} oldest {:.0} comp {:.4} plate {:.4} conts {}", self.time, pi, margin, oldest.0, area, parea, conts.len());
             }
-            if area < 0.0012 * TAU {
+            if area < 0.005 * TAU {
                 continue;
             }
-            if area > 0.85 * parea {
+            if !margin && area > 0.85 * parea {
                 // the whole plate is old: break it and let one half sink under the other
                 if self.rift(pi, false, true) {
                     return true;
@@ -1929,12 +2045,48 @@ impl Sim {
             }
         }
         println!("   old>300 by (plate, touches cont): {:?}", old);
+        let mut per: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
+        for (&(pl, _), &k) in &old {
+            *per.entry(pl).or_insert(0) += k;
+        }
+        for (&pl, &k) in &per {
+            if k < 100 || pl < 0 {
+                continue;
+            }
+            let pi = pl as usize;
+            let (mut conv, mut div, mut tr, mut edge_age, mut ne, mut slabs) = (0, 0, 0, 0.0, 0, 0.0);
+            for c in 0..n {
+                if self.owner[c] != pl {
+                    continue;
+                }
+                if self.slab_pid[c] == self.plates[pi].id {
+                    slabs += self.slab[c] as f64;
+                }
+                for &d in self.g.nb(c) {
+                    let d = d as usize;
+                    let o = self.owner[d];
+                    if o < 0 || o == pl {
+                        continue;
+                    }
+                    let dir = normalize(tangent(sub(self.g.pos[d], self.g.pos[c]), self.g.pos[c]));
+                    let rel = sub(self.vel(o as usize, c), self.vel(pi, c));
+                    let r = -dot(rel, dir);
+                    if r > 3.0 { conv += 1 } else if r < -3.0 { div += 1 } else { tr += 1 }
+                    edge_age += self.age_w[c] as f64;
+                    ne += 1;
+                    break;
+                }
+            }
+            println!("     plate {} id {} old {} speed {:.0} area {:.3} cont {:.3} edges conv/div/tr {}/{}/{} mean edge age {:.0} slab {:.4} age_myr {:.0}",
+                pl, self.plates[pi].id, k, len(self.plates[pi].omega) * self.prm.radius, self.plates[pi].area, self.plates[pi].cont_area, conv, div, tr, edge_age / ne.max(1) as f64, slabs, self.plates[pi].age_myr);
+        }
         let info: Vec<(i32, i32)> = self.plates.iter().map(|p| ((p.cont_area / TAU * 1000.0) as i32, p.age_myr as i32)).collect();
         println!("   plates (cont‰, age) {:?}", info);
         let mut pc: Vec<f64> = self.pair_coll.values().copied().collect();
         pc.sort_by(|a, b| b.partial_cmp(a).unwrap());
         pc.truncate(3);
         let speeds: Vec<i32> = self.plates.iter().map(|p| (len(p.omega) * self.prm.radius) as i32).collect();
+        println!("   diag edge/deep/ridge/nodonor {:?}", self.stats.diag.map(|v| (v * 10.0).round() / 10.0));
         println!("   pair_coll top {:?} speeds {:?} merges {} inits {} rifts {}", pc, speeds, self.stats.merges, self.stats.sub_inits, self.stats.rifts);
         println!(
             "t={:.0} plates={} isolated={} (cont {}) cand0..4={:?} slots/n={:.3} steps={}",

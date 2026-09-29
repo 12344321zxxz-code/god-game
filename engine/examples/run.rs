@@ -38,7 +38,13 @@ fn main() {
     let mut t = 0.0;
     while t < myr {
         t = sim.run(10.0_f64.min(myr - t), 1_000_000);
-        sim.debug_report();
+        if std::env::var("QUIET").is_err() {
+            sim.debug_report();
+        }
     }
     eprintln!("{} Myr in {:.2}s", myr, t0.elapsed().as_secs_f64());
+    let names = ["coverage", "local", "gaps", "gather", "subduction", "coll+rift", "hotspots", "flow", "erosion", "apply", "bounds", "forces", "events"];
+    for (n, t) in names.iter().zip(sim.prof.iter()) {
+        eprintln!("  {:<11} {:6.2}s", n, t);
+    }
 }

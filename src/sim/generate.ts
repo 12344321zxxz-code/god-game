@@ -5,6 +5,7 @@ import { runDrift } from './tectonics/drift';
 import { buildElevation } from './terrain/elevation';
 import { scoreWorld } from './metrics/scorecard';
 import type { World } from './world';
+import { initDeterministicMath } from '../engine/tecto';
 
 export type ProgressFn = (stage: string, fraction: number) => void;
 
@@ -27,6 +28,8 @@ export async function generateWorld(params: PlanetParams, progress: ProgressFn =
   const t0 = performance.now();
   const mark = (label: string, since: number) => (timings[label] = Math.round(performance.now() - since));
 
+  // same seed → same planet in every browser (see core/dmath.ts)
+  await initDeterministicMath();
   progress('Building hex grid', 0.02);
   const grid = getGrid(params.gridFreq);
   mark('grid', t0);
