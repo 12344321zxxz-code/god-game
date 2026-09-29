@@ -6,5 +6,5 @@ const engine = new Engine();
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 
 scope.onmessage = (ev: MessageEvent<WorkerRequest>) => {
-  engine.handle(ev.data, (msg: WorkerResponse) => scope.postMessage(msg, transferables(msg)));
+  void engine.handle(ev.data, (msg: WorkerResponse) => scope.postMessage(msg, transferables(msg)));
 };

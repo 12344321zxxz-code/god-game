@@ -207,7 +207,7 @@ function surfaceVelocity(grid: HexGrid, params: PlanetParams, plate: Uint16Array
   return v;
 }
 
-function classifyBoundaries(grid: HexGrid, plate: Uint16Array, v: Float32Array) {
+export function classifyBoundaries(grid: HexGrid, plate: Uint16Array, v: Float32Array) {
   const { count, edges, edgeCount, pos } = grid;
   const boundary = new Uint8Array(count);
   const boundaryRate = new Float32Array(count);
@@ -244,7 +244,7 @@ function classifyBoundaries(grid: HexGrid, plate: Uint16Array, v: Float32Array) 
   return { boundary, boundaryRate, otherPlate };
 }
 
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   const f = (n: number) => {
     const k = (n + h * 12) % 12;
     const a = s * Math.min(l, 1 - l);

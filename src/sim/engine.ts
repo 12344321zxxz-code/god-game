@@ -14,11 +14,11 @@ export class Engine {
   private baker?: WorldBaker;
   private sampler?: { key: string; s: TextureSampler };
 
-  handle(req: WorkerRequest, send: (msg: WorkerResponse) => void): void {
+  async handle(req: WorkerRequest, send: (msg: WorkerResponse) => void): Promise<void> {
     try {
       if (req.type === 'generate') {
         const progress = (stage: string, fraction: number) => send({ type: 'progress', id: req.id, stage, fraction });
-        const world = generateWorld(req.params, progress);
+        const world = await generateWorld(req.params, progress);
         const key = `${world.grid.freq}:${req.texWidth}x${req.texHeight}`;
         if (this.sampler?.key !== key) {
           progress('Mapping texture', 0.8);
@@ -58,6 +58,7 @@ export class Engine {
             boundary: world.boundary.slice(),
             boundaryRate: world.boundaryRate.slice(),
             velocity: world.velocity.slice(),
+            thickness: world.thickness ? world.thickness.slice() : new Float32Array(g.count),
           },
         });
       } else if (req.type === 'render') {

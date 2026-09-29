@@ -163,7 +163,7 @@ stage.addEventListener('pointermove', (e) => {
   const rows: [string, string][] = [
     ['Position', `${fmtLat(lat)} ${fmtLon(lon)}`],
     [elev >= 0 ? 'Elevation' : 'Depth', `${Math.abs(Math.round(elev)).toLocaleString()} m`],
-    ['Crust', d.crust[c] ? 'Continental' : `Oceanic, ${Math.round(d.oceanAge[c])} Myr old`],
+    ['Crust', (d.crust[c] ? 'Continental' : `Oceanic, ${Math.round(d.oceanAge[c])} Myr old`) + (d.thickness[c] ? ` · ${Math.round(d.thickness[c])} km thick` : '')],
     ['Plate', `#${d.plate[c]} · ${speed.toFixed(0)} mm/yr`],
   ];
   if (d.orogeny[c]) rows.push(['Landform', OROGENY_NAMES[d.orogeny[c]]]);

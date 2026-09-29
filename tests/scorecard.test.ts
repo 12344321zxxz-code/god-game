@@ -5,7 +5,7 @@ import { coastlineDimension, hypsometryPeaks, scoreWorld } from '../src/sim/metr
 import type { World } from '../src/sim/world';
 
 // One real world, then mutated copies that break one physical rule each.
-const base = generateWorld({ ...presetParams('earth', 'score-test'), gridFreq: 48 });
+const base = await generateWorld({ ...presetParams('earth', 'score-test'), gridFreq: 48, engine: 'snapshot' });
 
 function mutate(f: (w: World) => void): World {
   const w: World = {
@@ -76,8 +76,8 @@ describe('scorecard', () => {
     expect(statusOf(w, 'coast')).not.toBe('pass');
   });
 
-  it('scales the peak limit with gravity', () => {
-    const moon = generateWorld({ ...presetParams('moon', 'score-test'), gridFreq: 40 });
+  it('scales the peak limit with gravity', async () => {
+    const moon = await generateWorld({ ...presetParams('moon', 'score-test'), gridFreq: 40, engine: 'snapshot' });
     const peak = scoreWorld(moon).metrics.find((m) => m.id === 'peak')!;
     expect(peak.failIf).toContain('27.8 km');
     expect(peak.status).not.toBe('fail');

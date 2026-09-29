@@ -43,12 +43,12 @@ describe('half floats', () => {
   });
 });
 
-describe('world generation', () => {
-  const p = { ...presetParams('earth', 'test-seed'), gridFreq: 40 };
-  const w = generateWorld(p);
+describe('snapshot world generation (M1)', async () => {
+  const p = { ...presetParams('earth', 'test-seed'), gridFreq: 40, engine: 'snapshot' as const };
+  const w = await generateWorld(p);
 
-  it('is deterministic for a given seed', () => {
-    const w2 = generateWorld(p);
+  it('is deterministic for a given seed', async () => {
+    const w2 = await generateWorld(p);
     expect(Array.from(w2.elevation.slice(0, 500))).toEqual(Array.from(w.elevation.slice(0, 500)));
     expect(Array.from(w2.plate)).toEqual(Array.from(w.plate));
   });
@@ -84,8 +84,8 @@ describe('world generation', () => {
     }
   });
 
-  it('small low-gravity worlds get taller relief', () => {
-    const moon = generateWorld({ ...presetParams('moon', 'test-seed'), gridFreq: 32 });
+  it('small low-gravity worlds get taller relief', async () => {
+    const moon = await generateWorld({ ...presetParams('moon', 'test-seed'), gridFreq: 32, engine: 'snapshot' });
     expect(moon.stats.maxElevation).toBeGreaterThan(w.stats.maxElevation);
     expect(moon.stats.maxElevation).toBeLessThanOrEqual(9267 * 3);
   });

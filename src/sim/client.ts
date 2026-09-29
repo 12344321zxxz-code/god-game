@@ -20,13 +20,22 @@ export class WorldClient {
   private workerAlive = false;
   mode: 'worker' | 'main-thread' = 'worker';
 
+  /** Id of the generate request the worker is busy with, if any. */
+  private generating = 0;
+
   constructor() {
+    this.spawn();
+  }
+
+  private spawn() {
     try {
       this.worker = new WorldgenWorker();
       this.worker.onmessage = (ev: MessageEvent<WorkerResponse>) => {
         this.workerAlive = true;
         this.unanswered = [];
-        this.emit(ev.data);
+        const m = ev.data;
+        if ((m.type === 'generated' || m.type === 'error') && m.id === this.generating) this.generating = 0;
+        this.emit(m);
       };
       this.worker.onerror = (ev) => {
         console.error('worker error', ev);
@@ -64,12 +73,20 @@ export class WorldClient {
     }
     // Yield so the UI can paint its "working…" state before the long run.
     await new Promise((r) => setTimeout(r, 30));
-    this.fallback.handle(req, (m) => this.emit(m));
+    await this.fallback.handle(req, (m) => this.emit(m));
   }
 
   async send(req: DistributiveOmit<WorkerRequest, 'id'>): Promise<number> {
     const id = this.nextId++;
     const full = { ...req, id } as WorkerRequest;
+    if (this.worker && full.type === 'generate' && this.generating && this.workerAlive) {
+      // A plate simulation can run for minutes: drop the stale one by
+      // restarting the worker rather than queueing behind it.
+      this.worker.terminate();
+      this.unanswered = [];
+      this.spawn();
+    }
+    if (full.type === 'generate') this.generating = id;
     if (this.worker) {
       this.unanswered.push(full);
       this.worker.postMessage(full);

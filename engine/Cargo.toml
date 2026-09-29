@@ -1,0 +1,20 @@
+[package]
+name = "tecto"
+version = "0.1.0"
+edition = "2024"
+description = "God Game plate-tectonics engine (compiled to WebAssembly)"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
+
+[profile.dev]
+opt-level = 1

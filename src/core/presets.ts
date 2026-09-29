@@ -23,7 +23,15 @@ export interface PlanetParams {
   landFraction: number;
   /** Axial tilt in degrees (used by climate from M3). */
   tiltDeg: number;
+  /** 'drift': full plate simulation (Rust engine); 'snapshot': fast M1 preview. */
+  engine: EngineId;
+  /** Simulated history for the drift engine, Myr. */
+  simMyr: number;
+  /** Mean plate speed the mantle drives, mm/yr (Earth today ≈ 40–50). */
+  mantleSpeed: number;
 }
+
+export type EngineId = 'drift' | 'snapshot';
 
 export const EARTH_RADIUS_KM = 6371;
 
@@ -49,9 +57,9 @@ export function cellCount(freq: number): number {
 }
 
 const BASE: Record<Exclude<PresetId, 'custom'>, Omit<PlanetParams, 'seed' | 'preset'>> = {
-  earth: { radiusKm: 6371, gravity: 1, gridFreq: 128, plates: 12, continents: 9, landFraction: 0.29, tiltDeg: 23.5 },
-  mars: { radiusKm: 3390, gravity: 0.378, gridFreq: 90, plates: 6, continents: 4, landFraction: 0.29, tiltDeg: 25.2 },
-  moon: { radiusKm: 1737, gravity: 0.165, gridFreq: 90, plates: 6, continents: 3, landFraction: 0.29, tiltDeg: 1.5 },
+  earth: { radiusKm: 6371, gravity: 1, gridFreq: 128, plates: 12, continents: 9, landFraction: 0.29, tiltDeg: 23.5, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
+  mars: { radiusKm: 3390, gravity: 0.378, gridFreq: 90, plates: 6, continents: 4, landFraction: 0.29, tiltDeg: 25.2, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
+  moon: { radiusKm: 1737, gravity: 0.165, gridFreq: 90, plates: 6, continents: 3, landFraction: 0.29, tiltDeg: 1.5, engine: 'drift', simMyr: 500, mantleSpeed: 40 },
 };
 
 export function presetParams(preset: Exclude<PresetId, 'custom'>, seed: string): PlanetParams {
@@ -77,6 +85,9 @@ export function encodeParams(p: PlanetParams): string {
     c: String(p.continents),
     l: String(p.landFraction),
     t: String(p.tiltDeg),
+    e: p.engine,
+    y: String(p.simMyr),
+    v: String(p.mantleSpeed),
   });
   return q.toString();
 }
@@ -101,6 +112,9 @@ export function decodeParams(hash: string): PlanetParams | null {
       continents: num('c', base.continents),
       landFraction: num('l', base.landFraction),
       tiltDeg: num('t', base.tiltDeg),
+      engine: q.get('e') === 'snapshot' ? 'snapshot' : q.get('e') === 'drift' ? 'drift' : base.engine,
+      simMyr: num('y', base.simMyr),
+      mantleSpeed: num('v', base.mantleSpeed),
     };
   } catch {
     return null;

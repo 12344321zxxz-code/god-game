@@ -1,0 +1,44 @@
+//! Native debug runner: cargo run --release --example run -- init.bin [myr]
+//! (make init.bin with DRIFT_DUMP=init.bin npx tsx scripts/drift-try.ts …)
+use tecto::grid::Grid;
+use tecto::params::Params;
+use tecto::sim::Sim;
+
+fn take<'a>(b: &'a [u8], at: &mut usize, bytes: usize) -> &'a [u8] {
+    let s = &b[*at..*at + bytes];
+    *at += bytes.div_ceil(8) * 8;
+    s
+}
+fn cast<T: Copy>(b: &[u8]) -> Vec<T> {
+    let n = b.len() / std::mem::size_of::<T>();
+    (0..n).map(|i| unsafe { std::ptr::read_unaligned(b.as_ptr().add(i * std::mem::size_of::<T>()) as *const T) }).collect()
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let b = std::fs::read(&args[1]).unwrap();
+    let myr: f64 = args.get(2).map(|s| s.parse().unwrap()).unwrap_or(100.0);
+    let mut at = 0;
+    let head: Vec<u32> = cast(take(&b, &mut at, 16));
+    let (n, nn, np, npl) = (head[0] as usize, head[1] as usize, head[2] as usize, head[3] as usize);
+    let pos: Vec<f64> = cast(take(&b, &mut at, 24 * n));
+    let off: Vec<u32> = cast(take(&b, &mut at, 4 * (n + 1)));
+    let nbrs: Vec<u32> = cast(take(&b, &mut at, 4 * nn));
+    let area: Vec<f64> = cast(take(&b, &mut at, 8 * n));
+    let prm: Vec<f64> = cast(take(&b, &mut at, 8 * np));
+    let plate: Vec<u32> = cast(take(&b, &mut at, 4 * n));
+    let cont: Vec<u8> = cast(take(&b, &mut at, n));
+    let thick: Vec<f32> = cast(take(&b, &mut at, 4 * n));
+    let age: Vec<f32> = cast(take(&b, &mut at, 4 * n));
+    let omega: Vec<f64> = cast(take(&b, &mut at, 24 * npl));
+    let g = Grid::new(&pos, &off, &nbrs, &area);
+    let mut sim = Sim::new(g, Params::from_slice(&prm));
+    sim.init(&plate, &cont, &thick, &age, &omega);
+    let t0 = std::time::Instant::now();
+    let mut t = 0.0;
+    while t < myr {
+        t = sim.run(10.0_f64.min(myr - t), 1_000_000);
+        sim.debug_report();
+    }
+    eprintln!("{} Myr in {:.2}s", myr, t0.elapsed().as_secs_f64());
+}

@@ -8,7 +8,7 @@ const seed = 'bench';
 for (const preset of ['earth', 'mars', 'moon'] as const) {
   for (const { freq, label } of GRID_OPTIONS) {
     const p = { ...presetParams(preset, seed), gridFreq: freq };
-    const w = generateWorld(p);
+    const w = await generateWorld(p);
     const t0 = performance.now();
     buildTextureSampler(w.grid, 4096, 2048);
     const sampler = Math.round(performance.now() - t0);

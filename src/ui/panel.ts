@@ -33,6 +33,8 @@ export class Panel {
   private scoreEl!: HTMLElement;
   private scoreSumEl!: HTMLElement;
   private inputs: Record<string, HTMLInputElement | HTMLSelectElement> = {};
+  private engineSeg!: HTMLElement;
+  private driftRows: HTMLElement[] = [];
 
   constructor(
     private readonly root: HTMLElement,
@@ -41,12 +43,18 @@ export class Panel {
     private readonly h: PanelHandlers,
   ) {
     this.build();
+    this.syncEngine();
+  }
+
+  private syncEngine() {
+    for (const r of this.driftRows) r.style.display = this.params.engine === 'drift' ? '' : 'none';
+    for (const b of this.engineSeg.children) b.classList.toggle('on', (b as HTMLElement).dataset.v === this.params.engine);
   }
 
   private build() {
     const r = this.root;
     r.innerHTML = '';
-    r.append(el('div', { class: 'brand' }, [el('h1', {}, ['World Gen']), el('span', {}, ['M2a · scorecard'])]));
+    r.append(el('div', { class: 'brand' }, [el('h1', {}, ['World Gen']), el('span', {}, ['M2b · plate simulation'])]));
 
     // --- Planet ---
     const planet = section('Planet');
@@ -82,6 +90,19 @@ export class Panel {
     tect.append(this.slider('plates', 'Plates', 2, 40, 1, this.params.plates, (v) => String(v), (v) => this.update({ plates: v, preset: 'custom' })));
     tect.append(this.slider('continents', 'Continents', 1, 24, 1, this.params.continents, (v) => String(v), (v) => this.update({ continents: v, preset: 'custom' })));
     tect.append(this.slider('land', 'Land', 5, 80, 1, Math.round(this.params.landFraction * 100), (v) => `${v}%`, (v) => this.update({ landFraction: v / 100, preset: 'custom' })));
+    const eng = segmented([['drift', 'Full simulation'], ['snapshot', 'Sketch']], this.params.engine, (v) => {
+      this.update({ engine: v as PlanetParams['engine'] });
+      this.syncEngine();
+    });
+    this.engineSeg = eng;
+    tect.append(row('Engine', eng));
+    this.driftRows = [
+      this.slider('myr', 'History', 50, 1500, 50, this.params.simMyr, (v) => `${v} Myr`, (v) => this.update({ simMyr: v })),
+      this.slider('speed', 'Mantle vigour', 10, 100, 5, this.params.mantleSpeed, (v) => `${v} mm/yr`, (v) => this.update({ mantleSpeed: v, preset: 'custom' })),
+    ];
+    this.driftRows[0].title = 'How many million years of plate history to simulate. Longer = more collisions, rifts and eroded old ranges (and a longer wait).';
+    this.driftRows[1].title = 'Mean plate speed the mantle drives (Earth today ≈ 40 mm/yr).';
+    tect.append(...this.driftRows);
     const gridSel = select(
       GRID_OPTIONS.map((o) => [String(o.freq), o.label]),
       String(this.params.gridFreq),
@@ -89,6 +110,7 @@ export class Panel {
     );
     this.inputs.grid = gridSel;
     tect.append(row('Resolution', gridSel));
+    tect.append(el('p', { class: 'note' }, ['Full simulation runs the plates through their history (subduction, collisions, rifting, hot spots, erosion) — about a minute per 100k cells.']));
     tect.append(button('New planet', () => {
       seed.value = randomSeed();
       this.update({ seed: seed.value });
@@ -159,7 +181,7 @@ export class Panel {
       if (!i) return;
       i.value = v;
       const out = (i as unknown as { _out?: HTMLOutputElement })._out;
-      if (out) out.textContent = k === 'land' ? `${v}%` : v;
+      if (out) out.textContent = k === 'land' ? `${v}%` : k === 'myr' ? `${v} Myr` : k === 'speed' ? `${v} mm/yr` : v;
     };
     set('preset', p.preset);
     set('seed', p.seed);
@@ -169,6 +191,9 @@ export class Panel {
     set('continents', String(p.continents));
     set('land', String(Math.round(p.landFraction * 100)));
     set('grid', String(p.gridFreq));
+    set('myr', String(p.simMyr));
+    set('speed', String(p.mantleSpeed));
+    this.syncEngine();
     if (notify) this.h.onParams(p);
   }
 
@@ -187,6 +212,15 @@ export class Panel {
       ['Land', `${(s.landFraction * 100).toFixed(1)}%`],
       ['Highest peak', `${Math.round(s.maxElevation).toLocaleString()} m`],
       ['Deepest trench', `${Math.round(-s.minElevation).toLocaleString()} m`],
+      ...(s.drift
+        ? ([
+            ['History', `${Math.round(s.drift.time)} Myr · ${s.drift.steps.toLocaleString()} steps`],
+            ['Plates now', `${s.drift.plates}`],
+            ['Rifts · sutures', `${s.drift.rifts} · ${s.drift.merges}`],
+            ['New subduction zones', `${s.drift.subductionStarts}`],
+            ['Sea floor recycled', `${((s.drift.subductedSr / (4 * Math.PI)) * 100).toFixed(0)}% of the surface`],
+          ] as [string, string][])
+        : []),
       ['Generated in', `${(total / 1000).toFixed(2)} s`],
     ];
     this.statsEl.innerHTML = '';
@@ -273,6 +307,7 @@ function segmented(options: [string, string][], value: string, onChange: (v: str
       b.classList.add('on');
       onChange(v);
     });
+    b.dataset.v = v;
     if (v === value) b.classList.add('on');
     wrap.append(b);
   }

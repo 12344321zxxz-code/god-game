@@ -8,13 +8,17 @@ import { scoreWorld, type Metric } from '../src/sim/metrics/scorecard';
 const n = Number(process.argv[2] ?? 8);
 const mdIdx = process.argv.indexOf('--md');
 const mdPath = mdIdx > 0 ? process.argv[mdIdx + 1] : null;
+const engIdx = process.argv.indexOf('--engine');
+const engine = engIdx > 0 ? (process.argv[engIdx + 1] as 'drift' | 'snapshot') : undefined;
+const myrIdx = process.argv.indexOf('--myr');
+const myr = myrIdx > 0 ? Number(process.argv[myrIdx + 1]) : undefined;
 
 type Row = { preset: string; seed: string; metrics: Metric[] };
 const rows: Row[] = [];
 for (const preset of ['earth', 'mars', 'moon'] as const) {
   for (let i = 0; i < n; i++) {
     const seed = `baseline-${i}`;
-    const w = generateWorld(presetParams(preset, seed));
+    const w = await generateWorld({ ...presetParams(preset, seed), ...(engine ? { engine } : {}), ...(myr ? { simMyr: myr } : {}) });
     const sc = scoreWorld(w);
     rows.push({ preset, seed, metrics: sc.metrics });
     const flags = sc.metrics.map((m) => (m.status === 'fail' ? 'F' : m.status === 'warn' ? 'w' : m.status === 'pass' ? '.' : '-')).join('');

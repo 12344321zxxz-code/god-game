@@ -20,6 +20,8 @@ export interface CellData {
   boundary: Uint8Array;
   boundaryRate: Float32Array;
   velocity: Float32Array;
+  /** Crust thickness, km (0 when the snapshot engine made the world). */
+  thickness: Float32Array;
 }
 
 export type WorkerResponse =
@@ -48,7 +50,7 @@ export function transferables(msg: WorkerResponse): Transferable[] {
     return [
       msg.heightMap.buffer, msg.rgba.buffer, c.pos.buffer, c.nbrOffset.buffer, c.nbrs.buffer, c.plate.buffer,
       c.crust.buffer, c.elevation.buffer, c.oceanAge.buffer, c.orogeny.buffer, c.boundary.buffer,
-      c.boundaryRate.buffer, c.velocity.buffer,
+      c.boundaryRate.buffer, c.velocity.buffer, c.thickness.buffer,
     ] as Transferable[];
   }
   if (msg.type === 'texture') return [msg.rgba.buffer, msg.heightMap.buffer] as Transferable[];

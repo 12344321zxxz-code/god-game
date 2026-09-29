@@ -1,6 +1,7 @@
 import type { PlanetParams } from '../core/presets';
 import type { HexGrid } from '../grid/hexgrid';
 import type { Scorecard } from './metrics/scorecard';
+import type { TectoStats } from '../engine/tecto';
 
 /** Crust type per cell. */
 export const Crust = { Ocean: 0, Continent: 1 } as const;
@@ -21,9 +22,10 @@ export const Orogeny = {
   Trench: 5,
   Rift: 6,
   Ancient: 7,
+  Hotspot: 8,
 } as const;
 
-export const OROGENY_NAMES = ['—', 'Andean cordillera', 'Collision plateau', 'Collision foreland', 'Island arc', 'Trench', 'Rift', 'Old range'];
+export const OROGENY_NAMES = ['—', 'Andean cordillera', 'Collision plateau', 'Collision foreland', 'Island arc', 'Trench', 'Rift', 'Old range', 'Hotspot volcanism'];
 export const BOUNDARY_NAMES = ['—', 'Convergent', 'Divergent', 'Transform'];
 
 export interface Plate {
@@ -56,6 +58,8 @@ export interface World {
   /** Oceanic crust age in Myr (−1 on continents). */
   oceanAge: Float32Array;
   orogeny: Uint8Array;
+  /** Crust thickness in km (drift engine only). */
+  thickness?: Float32Array;
   /** Elevation relative to sea level, metres. */
   elevation: Float32Array;
   stats: WorldStats;
@@ -70,4 +74,6 @@ export interface WorldStats {
   maxElevation: number;
   minElevation: number;
   timings: Record<string, number>;
+  /** Drift-engine history counters (drift engine only). */
+  drift?: TectoStats;
 }

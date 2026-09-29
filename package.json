@@ -2,7 +2,7 @@
   "name": "god-game",
   "version": "0.1.0",
   "private": true,
-  "description": "Procedural planet generator \u2014 the world layer of a future god game.",
+  "description": "Procedural planet generator — the world layer of a future god game.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "bench": "tsx scripts/bench.ts",
     "shot": "node scripts/screenshot.mjs",
     "score": "tsx scripts/score.ts",
-    "build:artifact": "npm run build:single && node scripts/artifact.mjs"
+    "build:artifact": "npm run build:single && node scripts/artifact.mjs",
+    "engine": "node scripts/build-engine.mjs"
   },
   "dependencies": {
     "simplex-noise": "^4.0.3",

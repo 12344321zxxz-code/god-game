@@ -9,13 +9,13 @@ const outDir = process.argv[3] ?? 'shots';
 mkdirSync(outDir, { recursive: true });
 
 const shots = [
-  { name: 'earth-satellite-globe', hash: 's=basalt-drift-7&p=earth', mode: 'Satellite', view: 'Globe' },
-  { name: 'earth-plates-globe', hash: 's=basalt-drift-7&p=earth', mode: 'Plates', view: 'Globe', arrows: true },
-  { name: 'earth-satellite-map', hash: 's=basalt-drift-7&p=earth', mode: 'Satellite', view: 'Flat map' },
-  { name: 'earth-elevation-map', hash: 's=basalt-drift-7&p=earth', mode: 'Elevation', view: 'Flat map' },
-  { name: 'earth-age-map', hash: 's=basalt-drift-7&p=earth', mode: 'Crust age', view: 'Flat map' },
-  { name: 'earth-plates-map', hash: 's=basalt-drift-7&p=earth', mode: 'Plates', view: 'Flat map', arrows: true },
-  { name: 'mars-satellite-globe', hash: 's=basalt-drift-7&p=mars', mode: 'Satellite', view: 'Globe' },
+  { name: 'earth-satellite-globe', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Satellite', view: 'Globe' },
+  { name: 'earth-plates-globe', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Plates', view: 'Globe', arrows: true },
+  { name: 'earth-satellite-map', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Satellite', view: 'Flat map' },
+  { name: 'earth-elevation-map', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Elevation', view: 'Flat map' },
+  { name: 'earth-age-map', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Crust age', view: 'Flat map' },
+  { name: 'earth-plates-map', hash: 's=basalt-drift-7&p=earth&n=64', mode: 'Plates', view: 'Flat map', arrows: true },
+  { name: 'mars-satellite-globe', hash: 's=basalt-drift-7&p=mars&n=64', mode: 'Satellite', view: 'Globe' },
 ];
 const only = process.env.ONLY;
 
@@ -36,7 +36,7 @@ for (const s of shots) {
   const t0 = Date.now();
   const page = await freshPage();
   await page.goto(`${base}#${s.hash}`);
-  await page.waitForFunction(() => window.godgame?.current, null, { timeout: 180000 });
+  await page.waitForFunction(() => window.godgame?.current, null, { timeout: 600000 });
   const clickText = async (t) => page.locator('button', { hasText: t }).first().click();
   await clickText(s.view);
   if (s.arrows) await page.getByText('Plate motion arrows').click();
