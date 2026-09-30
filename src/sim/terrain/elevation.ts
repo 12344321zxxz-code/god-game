@@ -15,28 +15,15 @@ import { M } from '../../core/dmath';
  *   - sea level solved so land covers the target fraction
  */
 
-/** WorldSmith 8.00 ocean depth table: [crust age Myr, depth m]. */
-const DEPTH_TABLE: readonly (readonly [number, number])[] = [
-  [0, 2600], [10, 3707], [20, 4165], [30, 4494], [40, 4775], [50, 5014], [100, 5775], [150, 6118],
-  [200, 6273], [250, 6343], [300, 6374], [350, 6388], [400, 6395], [450, 6398], [500, 6399], [600, 6400],
-];
-
 /**
- * Ocean depth (positive metres) for crust age t in Myr, interpolating the
- * WorldSmith table in √age (the young-crust part follows 2600 + 350√t).
+ * Ocean depth (positive metres) for sea-floor age in Myr: GDH1 (Stein &
+ * Stein 1992), the standard fit to observed depths. It matches the √age
+ * cooling curve for young floor and flattens at ~5.65 km, where the older
+ * Parsons & Sclater curve (WorldSmith's table) keeps sinking to 6.4 km.
  */
 export function oceanDepth(tMyr: number): number {
   const t = Math.max(0, tMyr);
-  const st = Math.sqrt(t);
-  for (let i = 1; i < DEPTH_TABLE.length; i++) {
-    const [t1, d1] = DEPTH_TABLE[i];
-    if (t <= t1) {
-      const [t0, d0] = DEPTH_TABLE[i - 1];
-      const s0 = Math.sqrt(t0), s1 = Math.sqrt(t1);
-      return d0 + ((d1 - d0) * (st - s0)) / (s1 - s0);
-    }
-  }
-  return 6400;
+  return t < 20 ? 2600 + 365 * Math.sqrt(t) : 5651 - 2473 * M.exp(-0.0278 * t);
 }
 
 type Profile = readonly (readonly [number, number])[]; // [distance km, height m]

@@ -2,6 +2,7 @@ import { SphereNoise } from '../../core/noise';
 import { MAX_PEAK_EARTH_M, reliefScale, type PlanetParams } from '../../core/presets';
 import { hashString } from '../../core/rng';
 import type { HexGrid } from '../../grid/hexgrid';
+import { distanceField } from '../../grid/distance';
 import { loadTecto, P, PARAM_COUNT, type TectoOutput, type TectoStats } from '../../engine/tecto';
 import { buildElevation, smoothField } from '../terrain/elevation';
 import { Crust, Orogeny, type Plate } from '../world';
@@ -57,7 +58,7 @@ export type DriftProgress = (fraction: number, myr: number) => void;
 /** Continental thickness (km) that floats at elevation e (km, datum). Inverse of the engine's isostasy. */
 export function thicknessForElevation(eKm: number): number {
   const e = eKm < 0 ? eKm / 1.45 : eKm;
-  return (e + 4.7) / 0.1515;
+  return (e + 5.3) / 0.1515;
 }
 
 export async function runDrift(grid: HexGrid, params: PlanetParams, progress: DriftProgress = () => {}): Promise<DriftResult> {
@@ -69,12 +70,27 @@ export async function runDrift(grid: HexGrid, params: PlanetParams, progress: Dr
   const cont = new Uint8Array(n);
   const thick = new Float32Array(n);
   const age = new Float32Array(n);
+  // Continental edges start as stretched (passive) margins: crust tapers
+  // from ~full thickness 250 km inland to ~20 km at the ocean.
+  const edge: number[] = [];
+  for (let c = 0; c < n; c++) {
+    if (snap.crust[c] !== Crust.Continent) continue;
+    for (let k = grid.nbrOffset[c]; k < grid.nbrOffset[c + 1]; k++) {
+      if (snap.crust[grid.nbrs[k]] !== Crust.Continent) {
+        edge.push(c);
+        break;
+      }
+    }
+  }
+  const inland = distanceField(grid, params.radiusKm, edge, undefined, 400).dist;
   for (let c = 0; c < n; c++) {
     plate[c] = snap.plate[c];
     if (snap.crust[c] === Crust.Continent) {
       cont[c] = 1;
-      // M1 heights (+0.6 km so typical interiors start near 35 km)
-      thick[c] = Math.min(70, Math.max(26, thicknessForElevation(m1.elevation[c] / 1000 + 0.3)));
+      const full = Math.min(70, Math.max(34, thicknessForElevation(m1.elevation[c] / 1000 + 0.3)));
+      const d = Math.min(inland[c], 400);
+      const t = d / 250 >= 1 ? 1 : (d / 250) * (d / 250) * (3 - 2 * (d / 250));
+      thick[c] = 14 + (full - 14) * (0.4 + 0.6 * t);
     } else {
       thick[c] = 7;
       age[c] = Math.max(0, m1.oceanAge[c]);
@@ -172,10 +188,19 @@ function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftRes
   for (let c = 0; c < n; c++) {
     const x = grid.pos[3 * c], y = grid.pos[3 * c + 1], z = grid.pos[3 * c + 2];
     let e = elevation[c] - seaLevel;
-    // sub-cell texture: rugged in mountains, gentle elsewhere, abyssal hills at sea
-    if (e > 800) e += (e - 400) * 0.22 * (noise.ridged(x, y, z, 24, 4) - 0.45);
-    else if (e > 0) e += 90 * noise.fbm(x, y, z, 20, 4);
-    else if (!out.cont[c]) e += (80 + 150 * M.exp(-Math.max(0, out.age[c]) / 30)) * noise.fbm(x, y, z, 30, 3);
+    // Sub-cell texture, scaled to the height itself so it can never push a
+    // cell across sea level (that used to pepper lowlands with fake lakes
+    // and fray every coast): rugged ridges on high ground, a gentle roll on
+    // lowlands and shelves, abyssal hills on the ocean floor.
+    if (e > 0) {
+      const rugged = smooth01((e - 600) / 1400);
+      const tex = rugged * 1.6 * (noise.ridged(x, y, z, 24, 4) - 0.45) + (1 - rugged) * noise.fbm(x, y, z, 20, 4);
+      e += Math.min(0.3 * e, 1500) * tex;
+    } else if (out.cont[c]) {
+      e += 0.15 * -e * noise.fbm(x, y, z, 20, 3);
+    } else {
+      e += Math.min(0.3 * -e, 80 + 150 * M.exp(-Math.max(0, out.age[c]) / 30)) * noise.fbm(x, y, z, 30, 3);
+    }
     if (e > 0) e = softCap(e, cap);
     elevation[c] = e;
     if (e > 0) land += grid.area[c];
@@ -196,6 +221,11 @@ function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftRes
     landFraction: land / (4 * Math.PI),
     drift: out.stats,
   };
+}
+
+function smooth01(t: number): number {
+  const u = Math.min(1, Math.max(0, t));
+  return u * u * (3 - 2 * u);
 }
 
 function softCap(e: number, cap: number): number {

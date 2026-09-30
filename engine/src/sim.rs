@@ -67,19 +67,13 @@ const K_COLL: f64 = 30.0;
 /// Basal drag weight of continental lithosphere relative to oceanic (deep keels).
 const DRAG_CONT: f64 = 3.0;
 /// Sea floor older than this (Myr) starts to founder at plate edges.
-const FOUNDER_AGE: f32 = 160.0;
+const FOUNDER_AGE: f32 = 120.0;
 /// Clock (Myr) of the slow surface processes (uplift, flow, erosion, hot spots).
 const PROC_DT: f64 = 1.0;
 /// Relative speed (mm/yr) below which a boundary neither consumes nor makes crust.
 const MIN_RATE: f64 = 3.0;
 /// Hard cap on any plate's speed, mm/yr.
 const MAX_SPEED: f64 = 160.0;
-
-/// WorldSmith 8.00 ocean depth table: [age Myr, depth m].
-const DEPTH_TABLE: [(f64, f64); 16] = [
-    (0., 2600.), (10., 3707.), (20., 4165.), (30., 4494.), (40., 4775.), (50., 5014.), (100., 5775.), (150., 6118.),
-    (200., 6273.), (250., 6343.), (300., 6374.), (350., 6388.), (400., 6395.), (450., 6398.), (500., 6399.), (600., 6400.),
-];
 
 const DEPTH_LUT_N: usize = 1024;
 /// √age step of the depth lookup table (covers 0–625 Myr).
@@ -96,28 +90,22 @@ pub fn ocean_depth_fast(t: f32) -> f32 {
     lut[i] + (lut[i + 1] - lut[i]) * f
 }
 
-/// Ocean depth (positive m) for crust age, interpolated in √age.
+/// Ocean depth (positive m) for sea-floor age in Myr: GDH1 (Stein & Stein
+/// 1992), the standard fit to observed depths. Unlike the older Parsons &
+/// Sclater curve it flattens at ~5.65 km, so old basins are not overdeep.
 pub fn ocean_depth(t: f64) -> f64 {
     let t = t.max(0.0);
-    let st = t.sqrt();
-    for i in 1..DEPTH_TABLE.len() {
-        let (t1, d1) = DEPTH_TABLE[i];
-        if t <= t1 {
-            let (t0, d0) = DEPTH_TABLE[i - 1];
-            let (s0, s1) = (t0.sqrt(), t1.sqrt());
-            return d0 + (d1 - d0) * (st - s0) / (s1 - s0);
-        }
-    }
-    6400.0
+    if t < 20.0 { 2600.0 + 365.0 * t.sqrt() } else { 5651.0 - 2473.0 * (-0.0278 * t).exp() }
 }
 
 /// Isostatic surface height (km, relative to a fixed datum) of a crust column.
 #[inline]
 pub fn crust_elev(thick: f32, age: f32, cont: u8) -> f64 {
     if cont != 0 {
-        // Airy: (1 − ρc/ρm) ≈ 0.1515; 35 km → ≈ +0.6 km. Below water the
+        // Airy slope (1 − ρc/ρm) ≈ 0.1515, offset calibrated on Earth
+        // (cratons ~38 km at ~+0.7 km, Tibet ~70 km at ~5.6 km). Below water the
         // column sinks further (water load): ×ρm/(ρm − ρw) ≈ 1.45.
-        let e = 0.1515 * thick as f64 - 4.7;
+        let e = 0.1515 * thick as f64 - 5.3;
         if e < 0.0 { e * 1.45 } else { e }
     } else {
         -ocean_depth_fast(age) as f64 / 1000.0 + (thick as f64 - OCEAN_THICK as f64) * 0.3
@@ -974,7 +962,7 @@ impl Sim {
             }
             sources.push(c as u32);
             conv_of.push(conv as f32);
-            let depth = ((2.0 + 2.5 * (conv / 60.0).min(1.0)) * relief.min(1.5)) as f32;
+            let depth = ((1.5 + 2.5 * (conv / 60.0).min(1.0)) * relief.min(1.5)) as f32;
             for &d in &lows[..m] {
                 trench_src.push(d);
                 trench_depth.push(depth);
@@ -1051,14 +1039,15 @@ impl Sim {
         if !trench_src.is_empty() {
             let owner = &self.owner;
             let src_owner: Vec<i32> = trench_src.iter().map(|&c| owner[c as usize]).collect();
-            self.dij.run(&self.g, rk, &trench_src, 140.0, |d, si| owner[d] == src_owner[si]);
+            self.dij.run(&self.g, rk, &trench_src, 100.0, |d, si| owner[d] == src_owner[si]);
             for &d in &self.dij.touched {
                 let d = d as usize;
                 if self.cont_w[d] != 0 {
                     continue;
                 }
                 let x = self.dij.dist[d];
-                let depth = trench_depth[self.dij.src[d] as usize] * (-(x / 45.0).powi(2)).exp();
+                // trenches are ~50–100 km wide
+                let depth = trench_depth[self.dij.src[d] as usize] * (-(x / 30.0).powi(2)).exp();
                 if depth > self.trench[d] {
                     self.trench[d] = depth;
                 }
@@ -1121,7 +1110,7 @@ impl Sim {
             }
             let x = self.dij.dist[d] as f64;
             let h = (self.thick_w[d] + self.dthick[d]) as f64;
-            let thin = 0.12 * (h - 20.0).max(0.0) * (-x / 70.0).exp();
+            let thin = 0.12 * (h - 15.0).max(0.0) * (-x / 70.0).exp();
             self.dthick[d] -= thin as f32;
             self.stats.budget[1] -= thin * self.g.area[d];
             if x < 120.0 {
@@ -1193,7 +1182,8 @@ impl Sim {
         let l = self.spacing_km();
         let w0 = 4.0 / (6.0 * l * l); // hex-grid Laplacian weight per neighbour
         // background: one explicit step (stable while dt·κ·w0·6 < 1)
-        let k_bg = 150.0 * self.prm.gravity.min(1.0);
+        // cold continental crust barely flows; a little keeps single-cell spikes in check
+        let k_bg = 25.0 * self.prm.gravity.min(1.0);
         let sub_bg = ((dt * k_bg * w0 * 6.0) / 0.45).ceil().max(1.0) as usize;
         let h = &mut self.work;
         for c in 0..n {
@@ -1306,7 +1296,9 @@ impl Sim {
             }
             let mut vol = self.carry[c] as f64; // sr·km of rock
             if e > 0.0 {
-                let relief = (0.25 * e + 40.0 * slope).min(e);
+                // local relief of the drainage basins Ahnert measured: small on
+                // plains (a few % of height), large on steep ground
+                let relief = (0.08 * e + 40.0 * slope).min(e);
                 let rock = (k * relief * dt).min(0.5 * e / 0.1515); // km of crust
                 self.dthick[c] -= rock as f32;
                 if self.cont_w[c] != 0 {
@@ -1369,12 +1361,6 @@ impl Sim {
                     p.cont[s] = 1;
                     let a = self.g.area[p.cell[s] as usize];
                     if p.oro[s] == oro::HOTSPOT { self.stats.conv_hot += a } else { self.stats.conv_arc += a }
-                }
-                if p.cont[s] == 0 && p.age[s] > 200.0 && p.thick[s] > 15.0 {
-                    // an old basin buried under >8 km of sediment has become a
-                    // continental sedimentary basin (Pricaspian-style)
-                    p.cont[s] = 1;
-                    self.stats.conv_hot += 0.0;
                 }
                 p.thick[s] = p.thick[s].clamp(3.0, self.max_thick);
             }
@@ -1460,7 +1446,7 @@ impl Sim {
             });
             if younger_neighbour {
                 let f = ((age - FOUNDER_AGE) / 100.0).min(1.0) as f64;
-                self.slab[c] += (self.g.area[c] * f * dt / 10.0) as f32;
+                self.slab[c] += (self.g.area[c] * f * dt / 4.0) as f32;
                 self.slab_pid[c] = self.owner_id[c];
             }
         }
@@ -1787,7 +1773,7 @@ impl Sim {
         };
         let k = speed / rk;
         let mut plus_slots = vec![];
-        let thin_w = 250.0 / rk;
+        let thin_w = 350.0 / rk;
         let p = &mut self.plates[pi];
         for s in 0..p.cell.len() {
             if !p.alive[s] {
@@ -1800,7 +1786,9 @@ impl Sim {
             }
             if continental && p.cont[s] != 0 && sd.abs() < thin_w {
                 let x = sd.abs() * rk;
-                p.thick[s] *= 1.0 - 0.22 * (-(x / 110.0).powi(2)).exp() as f32;
+                // lithospheric stretching: β ≈ 2.5 on the rift axis, fading
+                // over ~250 km — this is what leaves tapered passive margins
+                p.thick[s] *= 1.0 - 0.6 * (-(x / 120.0).powi(2)).exp() as f32;
                 if x < 150.0 {
                     p.oro[s] = oro::RIFT;
                     p.oro_age[s] = 0.0;

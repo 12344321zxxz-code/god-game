@@ -5,25 +5,21 @@ import { generateWorld } from '../src/sim/generate';
 import { oceanDepth } from '../src/sim/terrain/elevation';
 import { Boundary, Crust } from '../src/sim/world';
 
-describe('ocean depth vs crust age', () => {
-  // WorldSmith 8.00 ocean depth table (m): exact at the table points.
-  const table: [number, number][] = [[0, 2600], [10, 3707], [20, 4165], [40, 4775], [50, 5014], [100, 5775], [150, 6118], [200, 6273], [300, 6374], [500, 6399]];
-  for (const [t, d] of table) {
-    it(`${t} Myr = ${d} m`, () => expect(oceanDepth(t)).toBeCloseTo(d, 6));
+describe('ocean depth vs crust age (GDH1)', () => {
+  const pts: [number, number][] = [[0, 2600], [10, 3754], [20, 4234], [50, 5035], [100, 5498], [150, 5613], [200, 5642]];
+  for (const [t, d] of pts) {
+    it(`${t} Myr ≈ ${d} m`, () => expect(Math.abs(oceanDepth(t) - d)).toBeLessThan(3));
   }
-  it('between points it stays within 2.5% of Parsons & Sclater', () => {
-    for (const t of [5, 15, 25, 70, 120]) {
-      const ps = Math.min(2600 + 350 * Math.sqrt(t), 6400 - 3200 * Math.exp(-t / 62.8));
-      expect(Math.abs(oceanDepth(t) - ps) / ps).toBeLessThan(0.025);
-    }
+  it('is continuous where the two branches meet', () => {
+    expect(Math.abs(oceanDepth(19.999) - oceanDepth(20))).toBeLessThan(5);
   });
-  it('is monotonic and levels off at 6.4 km', () => {
+  it('is monotonic and levels off near 5.65 km', () => {
     let prev = 0;
     for (let t = 0; t <= 800; t += 5) {
       expect(oceanDepth(t)).toBeGreaterThanOrEqual(prev);
       prev = oceanDepth(t);
     }
-    expect(oceanDepth(2000)).toBe(6400);
+    expect(Math.abs(oceanDepth(2000) - 5651)).toBeLessThan(1);
   });
 });
 

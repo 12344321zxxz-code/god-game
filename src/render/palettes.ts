@@ -106,7 +106,8 @@ export function satelliteColor(e: number, latDeg: number, wet: number, g: number
   const desert = alat < 40 ? DESERT : COLD_DESERT;
   mix(tmpA, desert, smooth(0.35, 0.75, dry), tmpB);
   // bare rock high up
-  mix(tmpB, ROCK, smooth(2600, 4200, e / g) * 0.8, tmpB);
+  // (heights are ~60 km cell averages, so ranges read lower than their peaks)
+  mix(tmpB, ROCK, smooth(1800, 3600, e / g) * 0.8, tmpB);
   // snow and ice caps
   const snow = smooth(66, 76, eLat + 3 * (wet - 0.5));
   return mix(tmpB, ICE, snow, out);

@@ -45,7 +45,7 @@ for (const s of shots) {
     await page.waitForFunction(() => !document.querySelector('#status .bar'), null, { timeout: 60000 });
   }
   await page.waitForTimeout(1500);
-  await page.screenshot({ path: `${outDir}/${s.name}.png` });
+  await page.screenshot({ path: `${outDir}/${s.name}.png`, timeout: 180000 });
   console.log(`${s.name}: ${Date.now() - t0} ms`);
   await page.close();
 }
