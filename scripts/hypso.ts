@@ -6,9 +6,11 @@ import { Crust } from '../src/sim/world';
 
 const [freqS = '64', myrS = '500', seed = 'basalt-drift-7', engine = 'drift'] = process.argv.slice(2);
 const w = await generateWorld({ ...presetParams('earth', seed), gridFreq: Number(freqS), simMyr: Number(myrS), engine: engine as 'drift' | 'snapshot' });
-const bands = [-1e9, -6000, -5000, -4000, -3000, -2000, -1000, -200, 0, 200, 500, 1000, 2000, 1e9];
-// Earth, % of total surface (ETOPO1-style hypsometry, rounded)
-const earth = [1.2, 13.6, 23.2, 13.6, 4.6, 3.0, 3.0, 5.4, 8.1, 6.6, 4.9, 4.5, 3.0];
+const bands = [-1e9, -6000, -4000, -1000, -200, 0, 1000, 2000, 1e9];
+// Earth, % of total surface. Ocean: sea-floor area by depth zone
+// (Wikipedia "Ocean", × 0.709 ocean share); land: classic 1 km bins
+// (Kossinna), 29.3 % in all. Sums to ~100 %.
+const earth = [0.7, 36.9, 25.0, 3.1, 5.2, 20.9, 4.5, 3.9];
 const share = new Array(bands.length - 1).fill(0);
 let tot = 0, contA = 0, contLow = 0;
 for (let c = 0; c < w.grid.count; c++) {

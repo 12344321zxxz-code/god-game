@@ -5,7 +5,8 @@ import { presetParams } from '../src/core/presets';
 import { distanceField } from '../src/grid/distance';
 import { generateWorld } from '../src/sim/generate';
 import { OROGENY_NAMES } from '../src/sim/world';
-const [freqS = '64', myrS = '500', seed = 'tide-strata-180'] = process.argv.slice(2);
+const [freqS = '64', myrS = '500', seed = 'tide-strata-180', binS = '100'] = process.argv.slice(2);
+const BIN = Number(binS);
 const w = await generateWorld({ ...presetParams('earth', seed), gridFreq: Number(freqS), simMyr: Number(myrS) });
 const g = w.grid;
 for (const kind of ['passive', 'active'] as const) {
@@ -22,10 +23,10 @@ for (const kind of ['passive', 'active'] as const) {
   const oro = new Map<string, number>();
   for (let c = 0; c < g.count; c++) {
     if (!w.crust[c] || !isFinite(df.dist[c])) continue;
-    const b = Math.min(11, Math.floor(df.dist[c] / 100));
+    const b = Math.min(11, Math.floor(df.dist[c] / BIN));
     bins[b].e += w.elevation[c]; bins[b].t += w.thickness![c]; bins[b].n++;
     if (df.dist[c] < 300) oro.set(OROGENY_NAMES[w.orogeny[c]], (oro.get(OROGENY_NAMES[w.orogeny[c]]) ?? 0) + 1);
   }
-  console.log(`${kind} coasts (${src.length} cells): ` + bins.map((b, i) => `${i * 100}km ${b.n ? Math.round(b.e / b.n) : '-'}m/${b.n ? (b.t / b.n).toFixed(1) : '-'}`).join('  '));
+  console.log(`${kind} coasts (${src.length} cells): ` + bins.map((b, i) => `${i * BIN}km ${b.n ? Math.round(b.e / b.n) : '-'}m/${b.n ? (b.t / b.n).toFixed(1) : '-'}`).join('  '));
   console.log('   orogeny within 300 km:', [...oro].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', '));
 }

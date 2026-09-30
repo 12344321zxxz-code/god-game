@@ -92,13 +92,13 @@ async function generate() {
     // sandboxed previews may block history changes; links just won't update
   }
   setStatus('Starting…', 0.02);
-  latestGenerate = await client.send({ type: 'generate', params, texWidth: TEX_W, texHeight: TEX_H, mode: display.mode, hex: display.hex });
+  latestGenerate = client.send({ type: 'generate', params, texWidth: TEX_W, texHeight: TEX_H, mode: display.mode, hex: display.hex });
 }
 
 async function requestRender() {
   if (!current) return;
   setStatus('Repainting…', 0.5);
-  latestRender = await client.send({ type: 'render', mode: display.mode, hex: display.hex });
+  latestRender = client.send({ type: 'render', mode: display.mode, hex: display.hex });
 }
 
 client.onMessage((msg: WorkerResponse) => {

@@ -3,6 +3,7 @@ import { SphereNoise } from '../core/noise';
 import { reliefScale } from '../core/presets';
 import { bakeScalar, nearestCellOf, type TextureSampler } from '../grid/sampler';
 import type { World } from '../sim/world';
+import { addSurfaceDetail } from './detail';
 import { BOUNDARY_COLORS, hypsometric, oceanAgeColor, satelliteColor, type RGB } from './palettes';
 
 export type MapMode = 'satellite' | 'elevation' | 'plates' | 'age';
@@ -34,7 +35,13 @@ export class WorldBaker {
 
   elevation(hex: boolean): Float32Array {
     if (hex) return (this.elevHexTex ??= this.bakeNearest(this.world.elevation));
-    return (this.elevTex ??= bakeScalar(this.sampler, this.world.grid.tris, this.world.elevation));
+    if (!this.elevTex) {
+      const e = bakeScalar(this.sampler, this.world.grid.tris, this.world.elevation);
+      // the sketch engine's heights already carry their texture
+      if (this.world.params.engine === 'drift') addSurfaceDetail(this.world, this.sampler, e);
+      this.elevTex = e;
+    }
+    return this.elevTex;
   }
 
   /** Land-only height (m) as half floats, for displacement and bump mapping. */

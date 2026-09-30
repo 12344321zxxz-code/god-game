@@ -26,14 +26,16 @@ pub struct Plate {
     /// Nearest world cell of each slot (refreshed every step; lookup hint).
     pub world: Vec<u32>,
     pub alive: Vec<bool>,
+    /// Slot is on top at some world cell in the current view (it is some
+    /// cell's `oslot`). Refreshed by `Sim::coverage`.
+    pub vis: Vec<u8>,
     free: Vec<u32>,
     pub live: usize,
     // derived each step
+    /// Area-weighted centroid of the crust, local frame.
     pub cen: V3,
-    pub cos_r: f64,
     pub area: f64,
     pub cont_area: f64,
-    pub torque: V3,
     /// Time since the plate was created or last reorganised (Myr).
     pub age_myr: f64,
 }
@@ -53,13 +55,12 @@ impl Plate {
             oro_age: vec![],
             world: vec![],
             alive: vec![],
+            vis: vec![],
             free: vec![],
             live: 0,
             cen: [0.0, 0.0, 1.0],
-            cos_r: -1.0,
             area: 0.0,
             cont_area: 0.0,
-            torque: [0.0; 3],
             age_myr: 0.0,
         }
     }
@@ -77,6 +78,7 @@ impl Plate {
             self.oro_age[s] = oro_age;
             self.world[s] = world as u32;
             self.alive[s] = true;
+            self.vis[s] = 0;
             s
         } else {
             self.cell.push(cell as u32);
@@ -87,6 +89,7 @@ impl Plate {
             self.oro_age.push(oro_age);
             self.world.push(world as u32);
             self.alive.push(true);
+            self.vis.push(0);
             self.cell.len() - 1
         };
         self.slot_of[cell] = s as i32;
@@ -121,6 +124,7 @@ impl Plate {
             self.oro[w] = self.oro[s];
             self.oro_age[w] = self.oro_age[s];
             self.world[w] = self.world[s];
+            self.vis[w] = self.vis[s];
             self.alive[w] = true;
             self.slot_of[self.cell[w] as usize] = w as i32;
             w += 1;
@@ -133,6 +137,7 @@ impl Plate {
         self.oro.truncate(w);
         self.world.truncate(w);
         self.alive.truncate(w);
+        self.vis.truncate(w);
         self.free.clear();
     }
 

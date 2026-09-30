@@ -213,7 +213,10 @@ function medianCrustAge(w: World): Metric {
 }
 
 function oldestCrust(w: World): Metric {
-  // 99.9th percentile by area, so a few odd cells don't decide it
+  // The age that the oldest 1 % of the ocean floor exceeds. The very
+  // oldest scraps are basins trapped inside continents (Earth's eastern
+  // Mediterranean, ~340 Myr); what shows whether plates recycle their sea
+  // floor is the bulk tail, so the pocket maximum is only reported.
   const cells: number[] = [];
   for (let c = 0; c < w.grid.count; c++) if (w.oceanAge[c] >= 0) cells.push(c);
   cells.sort((a, b) => w.oceanAge[a] - w.oceanAge[b]);
@@ -223,53 +226,58 @@ function oldestCrust(w: World): Metric {
   for (const c of cells) {
     acc += w.grid.area[c];
     v = w.oceanAge[c];
-    if (acc >= 0.999 * total) break;
+    if (acc >= 0.99 * total) break;
   }
+  const max = cells.length ? w.oceanAge[cells[cells.length - 1]] : 0;
   return {
     id: 'crust-age',
-    label: 'Oldest ocean crust',
+    label: 'Oldest ocean crust (1% tail)',
     value: v,
-    display: `${Math.round(v)} Myr`,
+    display: `${Math.round(v)} Myr (pockets to ${Math.round(max)})`,
     band: '100–350 Myr',
     // Old sea floor is dense and founders on its own, but slowly: a few
-    // hundred Myr is unusual (sluggish plates), a billion years means the
-    // plates simply are not recycling it.
-    failIf: 'over ~1,000 Myr (sea floor not recycled)',
-    earth: '~180 Myr (outlier ~340)',
-    status: status(v > 1000, v >= 100 && v <= 350),
+    // hundred Myr is unusual (sluggish plates); a 1 % tail older than
+    // ~1.5× Earth's oldest pocket means the plates are not recycling it.
+    failIf: 'over 500 Myr (sea floor not recycled)',
+    earth: '~180 Myr (pocket ~340)',
+    status: status(v > 500, v >= 100 && v <= 350),
   };
 }
 
 // --- relief extremes -------------------------------------------------------------
 
 function highestPeak(w: World, G: number): Metric {
+  // Heights are cell averages (~50–100 km across), not summits: Earth's
+  // highest such average (Himalaya/Tibet) is ~5.5–6 km against 8.8 km at
+  // Everest's top. The gravity cap still bounds any average.
   const cap = MAX_PEAK_EARTH_M * G;
   const v = w.stats.maxElevation;
   return {
     id: 'peak',
-    label: 'Highest peak',
+    label: 'Highest ground (cell average)',
     value: v,
     display: kmh(v),
-    band: `${kmh(0.35 * cap)}–${kmh(cap)}`,
+    band: `${kmh(0.3 * cap)}–${kmh(0.85 * cap)}`,
     failIf: `above ${kmh(cap)} (gravity limit)`,
-    earth: '8.8 km',
-    status: status(v > cap * 1.001, v >= 0.35 * cap),
-    note: v < 0.35 * cap ? 'No major mountain range formed.' : undefined,
+    earth: '~6 km (summit 8.8 km)',
+    status: status(v > cap * 1.001, v >= 0.3 * cap && v <= 0.85 * cap),
+    note: v < 0.3 * cap ? 'No major mountain range formed.' : undefined,
   };
 }
 
 function deepestTrench(w: World, G: number): Metric {
   const v = -w.stats.minElevation;
   const g = Math.min(G, 1.5);
+  // cell averages again: a ~70 km-wide trench averages ~7–9 km at its deepest
   return {
     id: 'trench',
-    label: 'Deepest trench',
+    label: 'Deepest trench (cell average)',
     value: v,
     display: kmh(v),
-    band: `${kmh(6000 * g)}–${kmh(12000 * g)}`,
-    failIf: `deeper than ${kmh(16000 * g)}`,
-    earth: '11.0 km',
-    status: status(v > 16000 * g, v >= 6000 * g && v <= 12000 * g),
+    band: `${kmh(6000 * g)}–${kmh(11000 * g)}`,
+    failIf: `deeper than ${kmh(14000 * g)}`,
+    earth: '~8.5 km (point 11.0 km)',
+    status: status(v > 14000 * g, v >= 6000 * g && v <= 11000 * g),
   };
 }
 

@@ -22,12 +22,15 @@ export class WorldClient {
 
   /** Id of the generate request the worker is busy with, if any. */
   private generating = 0;
+  /** Main-thread requests run one after another, in order. */
+  private localQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.spawn();
   }
 
   private spawn() {
+    this.workerAlive = false; // a respawned worker must prove itself again
     try {
       this.worker = new WorldgenWorker();
       this.worker.onmessage = (ev: MessageEvent<WorkerResponse>) => {
@@ -39,7 +42,7 @@ export class WorldClient {
       };
       this.worker.onerror = (ev) => {
         console.error('worker error', ev);
-        if (!this.workerAlive) void this.switchToMainThread();
+        if (!this.workerAlive) this.switchToMainThread();
       };
     } catch (e) {
       console.warn('Web Worker unavailable, generating on the main thread', e);
@@ -57,13 +60,21 @@ export class WorldClient {
     for (const l of this.listeners) l(msg);
   }
 
-  private async switchToMainThread() {
+  private switchToMainThread() {
     this.worker?.terminate();
     this.worker = undefined;
     this.mode = 'main-thread';
     const pending = this.unanswered;
     this.unanswered = [];
-    for (const r of pending) await this.runLocal(r);
+    for (const r of pending) this.enqueueLocal(r);
+  }
+
+  /** Queues a request on the main thread without waiting for it, so the
+   *  caller learns the request id before any reply for it is emitted. */
+  private enqueueLocal(req: WorkerRequest) {
+    this.localQueue = this.localQueue
+      .then(() => this.runLocal(req))
+      .catch((e: unknown) => this.emit({ type: 'error', id: req.id, message: String(e) }));
   }
 
   private async runLocal(req: WorkerRequest) {
@@ -76,7 +87,7 @@ export class WorldClient {
     await this.fallback.handle(req, (m) => this.emit(m));
   }
 
-  async send(req: DistributiveOmit<WorkerRequest, 'id'>): Promise<number> {
+  send(req: DistributiveOmit<WorkerRequest, 'id'>): number {
     const id = this.nextId++;
     const full = { ...req, id } as WorkerRequest;
     if (this.worker && full.type === 'generate' && this.generating && this.workerAlive) {
@@ -91,7 +102,7 @@ export class WorldClient {
       this.unanswered.push(full);
       this.worker.postMessage(full);
     } else {
-      await this.runLocal(full);
+      this.enqueueLocal(full);
     }
     return id;
   }

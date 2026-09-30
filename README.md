@@ -43,19 +43,33 @@ The world is now made by running the plates through their history
 - **Sea-floor spreading.** Gaps between diverging plates fill with new
   ocean crust at the real opening rate, so crust ages form ridge-parallel
   stripes and ocean depth follows age.
-- **Mountain building.** Cordilleras grow above slabs (mostly shortening
-  that thins the back-arc, plus arc magmatism), island arcs grow into new
-  continental crust, the forearc is eroded away, rifts thin their margins,
-  hot spots build island chains and plume-head plateaus.
-- **Isostasy, flow and erosion.** Elevation floats on crust thickness;
-  thick crust spreads under its own weight (plateaus flatten); relief-driven
-  erosion moves rock downhill into basins and onto shelves.
+- **Mountain building.** Cordilleras grow 40–340 km behind trenches where
+  convergence beats ~15 mm/yr (arc magmatism plus shortening, added — a
+  rigid plate has nowhere to take it from), island arcs grow into new
+  continental crust, the forearc is scraped away, new sea floor thins the
+  continent beside it, hot spots build island chains and plume-head plateaus.
+- **Isostasy, flow and erosion.** Elevation floats on crust thickness
+  (Airy, 0.1515 km per km of crust; water-loaded ×1.45 below sea level;
+  ocean depth from age by GDH1). Crust over 55 km flows under its own
+  weight (plateaus flatten); relief-driven erosion (Ahnert) moves rock
+  downhill, fills land pits only to their spill point and builds shelves.
 - **Plate motions from forces.** Slab pull, gravitational sliding (ridge
-  push), collision resistance and drag from a slowly changing mantle flow,
-  balanced against basal drag and scaled to the mantle's vigour.
+  push), collision resistance (against closing motion only) and drag from
+  a slowly changing mantle flow, balanced against basal drag and scaled to
+  the mantle's vigour.
 - **Plate reorganisation.** Continents rift (big ones more often), old
-  ocean breaks away at passive margins and starts subducting, slivers are
-  absorbed.
+  ocean breaks away at passive margins (floor > 180 Myr) and founders
+  against the continent it left or against younger floor; new plates are
+  protected from the plate-count budget, slivers are absorbed.
+- **Sea level** comes from a fixed volume of water that relaxes toward the
+  Land slider's share over ~150 Myr (water exchange with the mantle), so
+  short-term sea level follows the basins.
+- **Exact bookkeeping.** Every crust column is updated exactly once per
+  step; the result does not depend on how the run is chunked or how often
+  it is looked at (tested), and is bit-identical across machines.
+- **Texture is not simulation.** The world stores cell averages; the
+  sub-cell texture (ridges, abyssal hills) is added per pixel when maps
+  are painted, scaled so it never moves a coastline.
 
 Some assumptions that matter (each one, when wrong, broke the continents):
 
@@ -63,12 +77,32 @@ Some assumptions that matter (each one, when wrong, broke the continents):
   Earth; a boundary through a continent rifts or crumples it at once.
 - **Continents are plains plus drowned margins.** The outer band thins
   seaward like a stretched passive margin; plains stand ~0.5 km above the sea.
-- **Sea level follows a fixed volume of water**, set so the Land slider's
-  share is dry at the start. Forcing a fixed land share instead made every
-  bit of continental growth flood the plains.
+- **Sea level follows a (slowly relaxing) volume of water**, set so the
+  Land slider's share is dry at the start. Forcing a fixed land share
+  instead made every bit of continental growth flood the plains.
 - **Passive margins rarely turn active**: only very old floor breaks away;
-  old ocean mostly founders against younger ocean (Izu–Bonin style).
+  old ocean also founders against younger ocean (Izu–Bonin style).
 - **Only very thick crust (>55 km) flows**; normal crust keeps its ranges.
+- **Starting state** (from the M1 sketch): continental crust = land + 0.1
+  of the surface; plains 38.5 ± 9 km thick, margins 20→34 km across the
+  outer band; sea-floor ages from distance to the start plates' own ridges,
+  scaled ×0.55 toward the steady state (median ~50 Myr) with a sediment
+  blanket of up to 1.5 km.
+
+- **Plates stay whole.** A plate whose crust comes apart becomes separate
+  plates; rift cuts are cleaned so both halves are single pieces. The plate
+  budget is 3× the Plates slider (Earth: ~15 major/minor plus dozens of
+  micro-plates) so new subduction zones live long enough to work.
+- **Cordilleras need an advancing upper plate.** Every sinking slab feeds
+  a narrow volcanic arc; the broad range (shortening) grows only where the
+  upper plate moves toward the trench (Andes vs. Cascades/Japan). This is
+  what removed the ranges that used to rim every coast.
+
+Known limits: small pockets of sea floor trapped inside continents can
+survive the whole run (the oldest ~0.5 % of the ocean; Earth's eastern
+Mediterranean is such a pocket); cell-scale heights (~50 km at the default
+grid) cap high ground near 5–6 km, like Earth's highest 50 km averages;
+shelves are narrower than Earth's.
 
 It takes about 1.5–3 minutes for the default 164k-cell Earth. The M1 snapshot
 engine stays available as a quick sketch.

@@ -25,7 +25,14 @@ fn main() {
     let off: Vec<u32> = cast(take(&b, &mut at, 4 * (n + 1)));
     let nbrs: Vec<u32> = cast(take(&b, &mut at, 4 * nn));
     let area: Vec<f64> = cast(take(&b, &mut at, 8 * n));
-    let prm: Vec<f64> = cast(take(&b, &mut at, 8 * np));
+    let mut prm: Vec<f64> = cast(take(&b, &mut at, 8 * np));
+    // PRM=i:v,j:w overrides engine parameters (see params.rs indices)
+    if let Ok(o) = std::env::var("PRM") {
+        for kv in o.split(',') {
+            let (k, v) = kv.split_once(':').unwrap();
+            prm[k.parse::<usize>().unwrap()] = v.parse().unwrap();
+        }
+    }
     let plate: Vec<u32> = cast(take(&b, &mut at, 4 * n));
     let cont: Vec<u8> = cast(take(&b, &mut at, n));
     let thick: Vec<f32> = cast(take(&b, &mut at, 4 * n));
@@ -37,17 +44,23 @@ fn main() {
     println!("init   {}", sim.census());
     let t0 = std::time::Instant::now();
     let mut t = 0.0;
-    while t < myr {
-        t = sim.run(10.0_f64.min(myr - t), 1_000_000);
+    let chunk: f64 = std::env::var("CHUNK").ok().map(|v| v.parse().unwrap()).unwrap_or(10.0);
+    let with_output = std::env::var("OUTPUT").is_ok();
+    while t < myr - 1e-6 {
+        t = sim.run(chunk.min(myr - t), 1_000_000);
+        if with_output {
+            sim.output();
+        }
         if std::env::var("QUIET").is_err() {
             sim.debug_report();
         }
-        if std::env::var("CENSUS").is_ok() && (t as i64) % 100 == 0 {
+        if std::env::var("CENSUS").is_ok() && (t / 100.0).floor() > ((t - chunk) / 100.0).floor() {
             println!("t={:<4.0} {}", t, sim.census());
         }
     }
     eprintln!("{} Myr in {:.2}s", myr, t0.elapsed().as_secs_f64());
     println!("final  {}", sim.census());
+    println!("fingerprint {:016x}", sim.fingerprint());
     let names = ["coverage", "local", "gaps", "gather", "subduction", "coll+rift", "hotspots", "flow", "erosion", "apply", "bounds", "forces", "events"];
     for (n, t) in names.iter().zip(sim.prof.iter()) {
         eprintln!("  {:<11} {:6.2}s", n, t);
