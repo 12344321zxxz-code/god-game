@@ -34,6 +34,7 @@ fn main() {
     let g = Grid::new(&pos, &off, &nbrs, &area);
     let mut sim = Sim::new(g, Params::from_slice(&prm));
     sim.init(&plate, &cont, &thick, &age, &omega);
+    println!("init   {}", sim.census());
     let t0 = std::time::Instant::now();
     let mut t = 0.0;
     while t < myr {
@@ -41,8 +42,12 @@ fn main() {
         if std::env::var("QUIET").is_err() {
             sim.debug_report();
         }
+        if std::env::var("CENSUS").is_ok() && (t as i64) % 100 == 0 {
+            println!("t={:<4.0} {}", t, sim.census());
+        }
     }
     eprintln!("{} Myr in {:.2}s", myr, t0.elapsed().as_secs_f64());
+    println!("final  {}", sim.census());
     let names = ["coverage", "local", "gaps", "gather", "subduction", "coll+rift", "hotspots", "flow", "erosion", "apply", "bounds", "forces", "events"];
     for (n, t) in names.iter().zip(sim.prof.iter()) {
         eprintln!("  {:<11} {:6.2}s", n, t);

@@ -89,7 +89,9 @@ export class Panel {
     const tect = section('Tectonics');
     tect.append(this.slider('plates', 'Plates', 2, 40, 1, this.params.plates, (v) => String(v), (v) => this.update({ plates: v, preset: 'custom' })));
     tect.append(this.slider('continents', 'Continents', 1, 24, 1, this.params.continents, (v) => String(v), (v) => this.update({ continents: v, preset: 'custom' })));
-    tect.append(this.slider('land', 'Land', 5, 80, 1, Math.round(this.params.landFraction * 100), (v) => `${v}%`, (v) => this.update({ landFraction: v / 100, preset: 'custom' })));
+    const landRow = this.slider('land', 'Land', 5, 80, 1, Math.round(this.params.landFraction * 100), (v) => `${v}%`, (v) => this.update({ landFraction: v / 100, preset: 'custom' }));
+    landRow.title = 'Sets how much water the planet has: this share of the surface is dry at the start of the plate simulation. After that sea level follows the history, so the final land share drifts a few %.';
+    tect.append(landRow);
     const eng = segmented([['drift', 'Full simulation'], ['snapshot', 'Sketch']], this.params.engine, (v) => {
       this.update({ engine: v as PlanetParams['engine'] });
       this.syncEngine();

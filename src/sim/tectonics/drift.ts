@@ -6,7 +6,7 @@ import { distanceField } from '../../grid/distance';
 import { loadTecto, P, PARAM_COUNT, type TectoOutput, type TectoStats } from '../../engine/tecto';
 import { buildElevation, smoothField } from '../terrain/elevation';
 import { Crust, Orogeny, type Plate } from '../world';
-import { areaQuantile, classifyBoundaries, hslToRgb, runSnapshotTectonics } from './snapshot';
+import { classifyBoundaries, hslToRgb, runSnapshotTectonics } from './snapshot';
 import { M } from '../../core/dmath';
 
 /**
@@ -63,15 +63,37 @@ export function thicknessForElevation(eKm: number): number {
 
 export async function runDrift(grid: HexGrid, params: PlanetParams, progress: DriftProgress = () => {}): Promise<DriftResult> {
   // --- starting state from the M1 snapshot --------------------------------
-  const snap = runSnapshotTectonics(grid, params);
+  // Continental crust covers land plus its drowned margins (Earth: 41 % of
+  // the surface for 29 % land). With too little, sea level has to sit high
+  // on the continents' own plains and every sea-level rise floods them.
+  const snap = runSnapshotTectonics(grid, params, Math.min(0.9, params.landFraction + 0.04));
+  fillEnclosedSeas(grid, snap.crust, 0.004);
   const m1 = buildElevation(grid, params, snap);
   const n = grid.count;
   const plate = new Uint32Array(n);
   const cont = new Uint8Array(n);
   const thick = new Float32Array(n);
   const age = new Float32Array(n);
-  // Continental edges start as stretched (passive) margins: crust tapers
-  // from ~full thickness 250 km inland to ~20 km at the ocean.
+  // Plates must carry whole continents. The M1 plates were drawn
+  // independently of the continents, so their boundaries slice through
+  // them — and a boundary inside a continent immediately rifts it or
+  // crumples it, which shredded every world into strips and islands.
+  // Each continent goes wholly to the plate holding most of it, together
+  // with a ring of sea floor, so plate boundaries start out at sea (like
+  // Earth's, where they mostly run through the oceans).
+  const startPlate = continentsInsidePlates(grid, params.radiusKm, snap.crust, snap.plate, snap.plates.length);
+  const used = new Map<number, number>();
+  for (let c = 0; c < n; c++) {
+    if (!used.has(startPlate[c])) used.set(startPlate[c], used.size);
+    plate[c] = used.get(startPlate[c])!;
+  }
+  // Continental crust = plains + drowned margins. The outer band of each
+  // continent — as wide as needed to hold the continental crust that is not
+  // land (Earth: ~30 % of it) — is a stretched margin thinning seaward from
+  // ~34 km to ~20 km, so the starting coastline runs along the margin and
+  // the plains (~38.5 km) stand ~0.5 km above the sea. Too narrow a margin
+  // put sea level on the plains themselves, and every later rise of sea
+  // level flooded the continents' interiors.
   const edge: number[] = [];
   for (let c = 0; c < n; c++) {
     if (snap.crust[c] !== Crust.Continent) continue;
@@ -82,26 +104,48 @@ export async function runDrift(grid: HexGrid, params: PlanetParams, progress: Dr
       }
     }
   }
-  const inland = distanceField(grid, params.radiusKm, edge, undefined, 400).dist;
+  const inland = distanceField(grid, params.radiusKm, edge, undefined, 2000).dist;
+  const crustNoise = new SphereNoise(params.seed, 'drift-crust');
+  const contCells: number[] = [];
+  let contArea = 0;
+  for (let c = 0; c < n; c++) if (snap.crust[c] === Crust.Continent) { contCells.push(c); contArea += grid.area[c]; }
+  contCells.sort((a, b) => inland[a] - inland[b]);
+  const marginShare = Math.max(0.1, 1 - params.landFraction / Math.max(1e-6, contArea / (4 * Math.PI)));
+  let acc = 0, marginKm = 0;
+  for (const c of contCells) {
+    acc += grid.area[c];
+    marginKm = inland[c];
+    if (acc >= marginShare * contArea) break;
+  }
+  // (capped: wider margins would sink every neck and peninsula)
+  marginKm = Math.min(250, Math.max(marginKm, 60));
   for (let c = 0; c < n; c++) {
-    plate[c] = snap.plate[c];
     if (snap.crust[c] === Crust.Continent) {
       cont[c] = 1;
-      const full = Math.min(70, Math.max(34, thicknessForElevation(m1.elevation[c] / 1000 + 0.3)));
-      const d = Math.min(inland[c], 400);
-      const t = d / 250 >= 1 ? 1 : (d / 250) * (d / 250) * (3 - 2 * (d / 250));
-      thick[c] = 14 + (full - 14) * (0.4 + 0.6 * t);
+      const x = grid.pos[3 * c], y = grid.pos[3 * c + 1], z = grid.pos[3 * c + 2];
+      // broad, gentle variation only (cratons and basins thousands of km
+      // across); small-scale bumps here became blotchy inland seas later
+      const plain = 40 + 4 * crustNoise.fbm(x, y, z, 1.3, 3);
+      const u = Math.min(inland[c], 2000) / marginKm;
+      thick[c] = u < 1 ? 20 + 14 * u : u < 1.6 ? 34 + (plain - 34) * smoothT((u - 1) / 0.6) : plain;
     } else {
-      thick[c] = 7;
-      age[c] = Math.max(0, m1.oceanAge[c]);
+      // 7 km of basalt plus the sediment blanket old floor carries (the
+      // run settles near ~1 km on average; starting bare made sea level
+      // creep up as the blanket built, drowning the continents)
+      thick[c] = 7 + Math.min(1.5, (0.55 * Math.min(180, Math.max(0, m1.oceanAge[c]))) / 50);
+      // M1 ages run old (median ~110 Myr); a planet with moving plates keeps
+      // its sea floor young (Earth: median ~60). Starting near that steady
+      // state keeps the basins — and so sea level — from drifting at first.
+      age[c] = 0.55 * Math.min(180, Math.max(0, m1.oceanAge[c]));
     }
   }
-  const omega = new Float64Array(3 * snap.plates.length);
-  snap.plates.forEach((p, i) => {
+  const omega = new Float64Array(3 * used.size);
+  for (const [old, i] of used) {
+    const p = snap.plates[old];
     omega[3 * i] = p.pole[0] * p.omega;
     omega[3 * i + 1] = p.pole[1] * p.omega;
     omega[3 * i + 2] = p.pole[2] * p.omega;
-  });
+  }
 
   // --- run the engine -------------------------------------------------------
   const prm = new Float64Array(PARAM_COUNT);
@@ -182,7 +226,9 @@ function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftRes
   for (let c = 0; c < n; c++) elevation[c] = out.elevKm[c] * 1000;
   // one light pass takes the edge off single-cell steps
   smoothField(grid, elevation, 1);
-  const seaLevel = areaQuantile(elevation, grid.area, 1 - params.landFraction);
+  // Sea level comes from the engine's fixed ocean volume: the land fraction
+  // starts at params.landFraction and then follows the planet's history.
+  const seaLevel = out.stats.seaLevelKm * 1000;
   const cap = MAX_PEAK_EARTH_M * reliefScale(params.gravity);
   let land = 0;
   for (let c = 0; c < n; c++) {
@@ -233,4 +279,93 @@ function softCap(e: number, cap: number): number {
   if (e <= knee) return e;
   const room = cap - knee;
   return knee + room * (1 - M.exp(-(e - knee) / room));
+}
+
+/**
+ * Reassigns plates so that no continent is split between plates and each
+ * continent sits inside its plate with a ~300 km rim of ocean floor.
+ */
+export function continentsInsidePlates(grid: HexGrid, radiusKm: number, crust: Uint8Array, plate: ArrayLike<number>, nPlates: number): Uint16Array {
+  const n = grid.count;
+  const out = Uint16Array.from(plate as ArrayLike<number>);
+  // continents = connected components of continental crust
+  const comp = new Int32Array(n).fill(-1);
+  const compPlate: number[] = [];
+  const cells: number[] = [];
+  for (let s = 0; s < n; s++) {
+    if (crust[s] !== Crust.Continent || comp[s] >= 0) continue;
+    const id = compPlate.length;
+    const votes = new Float64Array(nPlates);
+    const stack = [s];
+    comp[s] = id;
+    while (stack.length) {
+      const c = stack.pop()!;
+      cells.push(c);
+      votes[plate[c]] += grid.area[c];
+      for (let k = grid.nbrOffset[c]; k < grid.nbrOffset[c + 1]; k++) {
+        const d = grid.nbrs[k];
+        if (crust[d] === Crust.Continent && comp[d] < 0) {
+          comp[d] = id;
+          stack.push(d);
+        }
+      }
+    }
+    let best = 0;
+    for (let p = 1; p < nPlates; p++) if (votes[p] > votes[best]) best = p;
+    compPlate.push(best);
+  }
+  for (const c of cells) out[c] = compPlate[comp[c]];
+  // the ocean rim goes with its nearest continent
+  const coast: number[] = [];
+  for (let c = 0; c < n; c++) {
+    if (comp[c] < 0) continue;
+    for (let k = grid.nbrOffset[c]; k < grid.nbrOffset[c + 1]; k++) {
+      if (comp[grid.nbrs[k]] < 0) {
+        coast.push(c);
+        break;
+      }
+    }
+  }
+  const rim = distanceField(grid, radiusKm, coast, undefined, 300);
+  for (let c = 0; c < n; c++) {
+    if (comp[c] >= 0 || rim.source[c] < 0) continue;
+    out[c] = compPlate[comp[coast[rim.source[c]]]];
+  }
+  return out;
+}
+
+function smoothT(t: number): number {
+  const u = Math.min(1, Math.max(0, t));
+  return u * u * (3 - 2 * u);
+}
+
+/**
+ * Ocean-crust pockets enclosed by a continent and smaller than `maxShare`
+ * of the surface become continental crust: the sketch's noise leaves small
+ * holes that would otherwise start life as deep, drowned inland seas.
+ */
+function fillEnclosedSeas(grid: HexGrid, crust: Uint8Array, maxShare: number): void {
+  const n = grid.count;
+  const seen = new Uint8Array(n);
+  const limit = maxShare * 4 * Math.PI;
+  for (let s0 = 0; s0 < n; s0++) {
+    if (seen[s0] || crust[s0] === Crust.Continent) continue;
+    const cells: number[] = [];
+    const stack = [s0];
+    seen[s0] = 1;
+    let area = 0;
+    while (stack.length) {
+      const c = stack.pop()!;
+      cells.push(c);
+      area += grid.area[c];
+      for (let k = grid.nbrOffset[c]; k < grid.nbrOffset[c + 1]; k++) {
+        const d = grid.nbrs[k];
+        if (!seen[d] && crust[d] !== Crust.Continent) {
+          seen[d] = 1;
+          stack.push(d);
+        }
+      }
+    }
+    if (area < limit) for (const c of cells) crust[c] = Crust.Continent;
+  }
 }

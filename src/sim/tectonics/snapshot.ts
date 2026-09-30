@@ -25,8 +25,12 @@ export interface TectonicSnapshot {
 /** Relative speed below which a boundary counts as transform, mm/yr. */
 const MIN_NORMAL_RATE = 6;
 
-export function runSnapshotTectonics(grid: HexGrid, params: PlanetParams): TectonicSnapshot {
-  const crust = continentalCrust(grid, params);
+/**
+ * `contFraction`: share of the surface under continental crust (default
+ * land × 1.1 + 2 %, i.e. land plus a thin shelf rim, as the sketch wants).
+ */
+export function runSnapshotTectonics(grid: HexGrid, params: PlanetParams, contFraction?: number): TectonicSnapshot {
+  const crust = continentalCrust(grid, params, contFraction);
   const plate = growPlates(grid, params, streamFor(params.seed, 'plates'));
   const plates = makePlates(grid, params, plate, crust, streamFor(params.seed, 'plate-motion'));
   const velocity = surfaceVelocity(grid, params, plate, plates);
@@ -37,12 +41,12 @@ export function runSnapshotTectonics(grid: HexGrid, params: PlanetParams): Tecto
 // ---------------------------------------------------------------------------
 // Continental crust: cratons blended with noise, thresholded to a target area.
 
-function continentalCrust(grid: HexGrid, params: PlanetParams): Uint8Array {
+function continentalCrust(grid: HexGrid, params: PlanetParams, contFraction?: number): Uint8Array {
   const rng = streamFor(params.seed, 'cratons');
   const noise = new SphereNoise(params.seed, 'continents');
   const { count, pos, area } = grid;
   // Continental crust covers the land target plus shelves.
-  const target = Math.min(0.9, params.landFraction * 1.1 + 0.02);
+  const target = contFraction ?? Math.min(0.9, params.landFraction * 1.1 + 0.02);
   const k = Math.max(1, Math.round(params.continents));
   // Angular radius so that k cratons roughly cover the target area.
   const baseSigma = Math.sqrt((4 * target) / k) * 0.9;

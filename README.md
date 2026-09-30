@@ -57,7 +57,20 @@ The world is now made by running the plates through their history
   ocean breaks away at passive margins and starts subducting, slivers are
   absorbed.
 
-It takes about 1.5 minutes for the default 164k-cell Earth. The M1 snapshot
+Some assumptions that matter (each one, when wrong, broke the continents):
+
+- **Continents start inside plates.** Plate boundaries begin at sea, as on
+  Earth; a boundary through a continent rifts or crumples it at once.
+- **Continents are plains plus drowned margins.** The outer band thins
+  seaward like a stretched passive margin; plains stand ~0.5 km above the sea.
+- **Sea level follows a fixed volume of water**, set so the Land slider's
+  share is dry at the start. Forcing a fixed land share instead made every
+  bit of continental growth flood the plains.
+- **Passive margins rarely turn active**: only very old floor breaks away;
+  old ocean mostly founders against younger ocean (Izu–Bonin style).
+- **Only very thick crust (>55 km) flows**; normal crust keeps its ranges.
+
+It takes about 1.5–3 minutes for the default 164k-cell Earth. The M1 snapshot
 engine stays available as a quick sketch.
 
 ## What's in M1
