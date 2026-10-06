@@ -61,6 +61,17 @@ fn main() {
     eprintln!("{} Myr in {:.2}s", myr, t0.elapsed().as_secs_f64());
     println!("final  {}", sim.census());
     println!("fingerprint {:016x}", sim.fingerprint());
+    let d = sim.stats.adv_hist;
+    println!("active continental margin cell·Myr by upper-plate advance: <-10: {:.0}  -10..2: {:.0}  2..10: {:.0}  10..25: {:.0}  >25: {:.0}; mean conv {:.0}", d[0], d[1], d[2], d[3], d[4], d[5] / d[6].max(1e-9));
+    println!(
+        "area sr: arc/basin→continent {:.3}, hot spot→continent {:.3}, continent copied into holes {:.3}, continent stretched to ocean {:.3}",
+        sim.stats.conv_arc, sim.stats.conv_hot, sim.stats.copy_cont, sim.stats.cont_lost
+    );
+    let b = sim.stats.budget;
+    println!(
+        "budget sr·km: cordillera {:.2} rift {:.2} hotspot {:.2} erosion {:.2} deposition {:.2} collision {:.2} flow {:.2}; merges {} rifts {} inits {}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], sim.stats.merges, sim.stats.rifts, sim.stats.sub_inits
+    );
     let names = ["coverage", "local", "gaps", "gather", "subduction", "coll+rift", "hotspots", "flow", "erosion", "apply", "bounds", "forces", "events"];
     for (n, t) in names.iter().zip(sim.prof.iter()) {
         eprintln!("  {:<11} {:6.2}s", n, t);

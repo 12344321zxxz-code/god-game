@@ -74,6 +74,30 @@ describe('drift engine (M2b)', async () => {
     expect(Array.from(b.owner)).toEqual(Array.from(a.owner));
   });
 
+  it('keeps mountains and whole continents over a long history', async () => {
+    // The world used to wear flat and break into strips past ~500 Myr.
+    const { prepareDrift, finishDrift } = await import('../src/sim/tectonics/drift');
+    const { loadTecto } = await import('../src/engine/tecto');
+    const { landShape } = await import('../src/sim/metrics/landshape');
+    const { getGrid } = await import('../src/sim/generate');
+    const params = { ...presetParams('earth', 'drift-test'), gridFreq: 32 };
+    const grid = getGrid(32);
+    const { prm, init } = prepareDrift(grid, params);
+    const t = await loadTecto();
+    t.create(grid, prm);
+    t.init(init);
+    for (const at of [400, 900]) {
+      let time = t.output().stats.time;
+      while (time < at - 1e-6) time = t.run(at - time);
+      const s = landShape(grid, finishDrift(grid, params, t.output()).elevation, 6371, 1);
+      expect(s.above1k, `high ground at ${at} Myr`).toBeGreaterThan(0.08);
+      expect(s.interior, `interior land at ${at} Myr`).toBeGreaterThan(0.35);
+      expect(s.scraps, `land in scraps at ${at} Myr`).toBeLessThan(0.12);
+      expect(s.majorMasses, `landmasses at ${at} Myr`).toBeLessThanOrEqual(9);
+    }
+    t.dispose();
+  }, 120_000);
+
   const p = { ...presetParams('earth', 'drift-test'), gridFreq: 32, simMyr: 150 };
   const w = await generateWorld(p);
   const d = w.stats.drift!;

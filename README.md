@@ -37,27 +37,38 @@ The world is now made by running the plates through their history
   rotating frame; moving a plate is only a rotation, so coastlines and
   mountain belts are carried exactly, never re-interpolated.
 - **Subduction and collision.** Where plates overlap, ocean goes under
-  anything (the older slab sinks), continents never subduct; colliding
-  continents stack their crust onto the upper plate (crust is conserved)
-  and eventually suture into one plate.
+  anything (the older slab sinks). When two continents meet, their thin
+  stretched margins are dragged down with little resistance; full-thickness
+  crust jams the trench. The crust that goes under is shortened into the
+  upper plate over hundreds of km behind the suture (volume conserved) —
+  a belt that widens into a plateau once it reaches ~70 km thickness. The
+  two plates weld into one when the collision dies down, not at a set
+  amount of shortening.
 - **Sea-floor spreading.** Gaps between diverging plates fill with new
   ocean crust at the real opening rate, so crust ages form ridge-parallel
   stripes and ocean depth follows age.
-- **Mountain building.** Cordilleras grow 40–340 km behind trenches where
-  convergence beats ~15 mm/yr (arc magmatism plus shortening, added — a
-  rigid plate has nowhere to take it from), island arcs grow into new
-  continental crust, the forearc is scraped away, new sea floor thins the
-  continent beside it, hot spots build island chains and plume-head plateaus.
+- **Mountain building.** Every sinking slab feeds a narrow volcanic arc.
+  A broad cordillera (40–400 km behind the trench) grows only where the
+  upper plate advances on the trench, by about a quarter of that advance,
+  and unevenly along the margin. Island arcs grow into new continental
+  crust, the forearc is scraped away, new sea floor thins the continent
+  beside it, hot spots build island chains, plume-head plateaus and — under
+  continents — broad domes like East Africa's.
 - **Isostasy, flow and erosion.** Elevation floats on crust thickness
   (Airy, 0.1515 km per km of crust; water-loaded ×1.45 below sea level;
-  ocean depth from age by GDH1). Crust over 55 km flows under its own
-  weight (plateaus flatten); relief-driven erosion (Ahnert) moves rock
-  downhill, fills land pits only to their spill point and builds shelves.
+  ocean depth from age by GDH1). Crust over 62 km flows under its own
+  weight (plateaus flatten at 4–5 km). Relief-driven erosion (Ahnert, with
+  local relief at most a quarter of the height) moves rock downhill, fills
+  land pits only to their spill point and builds shelves; a dead range
+  decays over ~150 Myr like the Appalachians. Old sea floor buried under
+  ~13 km of sediment becomes the floor of a continental basin.
 - **Plate motions from forces.** Slab pull, gravitational sliding (ridge
   push), collision resistance (against closing motion only) and drag from
   a slowly changing mantle flow, balanced against basal drag and scaled to
   the mantle's vigour.
-- **Plate reorganisation.** Continents rift (big ones more often), old
+- **Plate reorganisation.** Big continents rift (small ones rarely), and
+  the upwelling that broke them keeps carrying the halves apart for ~80 Myr
+  so the rift becomes an ocean instead of stalling as a narrow sea. Old
   ocean breaks away at passive margins (floor > 180 Myr) and founders
   against the continent it left or against younger floor; new plates are
   protected from the plate-count budget, slivers are absorbed.
@@ -82,7 +93,7 @@ Some assumptions that matter (each one, when wrong, broke the continents):
   instead made every bit of continental growth flood the plains.
 - **Passive margins rarely turn active**: only very old floor breaks away;
   old ocean also founders against younger ocean (Izu–Bonin style).
-- **Only very thick crust (>55 km) flows**; normal crust keeps its ranges.
+- **Only very thick crust (>62 km) flows**; normal crust keeps its ranges.
 - **Starting state** (from the M1 sketch): continental crust = land + 0.1
   of the surface; plains 38.5 ± 9 km thick, margins 20→34 km across the
   outer band; sea-floor ages from distance to the start plates' own ridges,
@@ -97,6 +108,17 @@ Some assumptions that matter (each one, when wrong, broke the continents):
   a narrow volcanic arc; the broad range (shortening) grows only where the
   upper plate moves toward the trench (Andes vs. Cascades/Japan). This is
   what removed the ranges that used to rim every coast.
+
+- **Mountains need moving continents.** With weak mantle flow under the
+  plates continents barely moved, rarely collided and rarely advanced on
+  their trenches: the world wore flat. Rifts must not outrun collisions
+  either, or the land ends up in ever more, ever smaller pieces.
+
+The scorecard's Earth values are measured, not quoted: real elevation
+(ETOPO 20′) is averaged onto the same hex grid and run through the same
+code (`scripts/earth-ref.ts`; a test checks that Earth passes every
+height and shape check). The harness for "does the world hold up over
+time" is `scripts/longscore.ts` (one run per seed, scored every 500 Myr).
 
 Known limits: small pockets of sea floor trapped inside continents can
 survive the whole run (the oldest ~0.5 % of the ocean; Earth's eastern

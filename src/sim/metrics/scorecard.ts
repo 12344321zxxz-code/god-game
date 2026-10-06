@@ -4,6 +4,7 @@ import { buildHexGrid, type HexGrid } from '../../grid/hexgrid';
 import { CellLocator } from '../../grid/locator';
 import type { World } from '../world';
 import { M } from '../../core/dmath';
+import { landShape, type LandShape } from './landshape';
 
 /**
  * Planet scorecard.
@@ -50,10 +51,14 @@ const kmh = (m: number) => `${(m / 1000).toFixed(1)} km`;
 export function scoreWorld(w: World): Scorecard {
   const t0 = performance.now();
   const G = reliefScale(w.params.gravity);
+  const shape = landShape(w.grid, w.elevation, w.params.radiusKm, G);
   const metrics: Metric[] = [
     hypsometry(w),
-    meanLandElevation(w, G),
+    meanLandElevation(shape, G),
+    highGround(shape, G),
     landmasses(w),
+    landInterior(shape),
+    landScraps(shape),
     medianCrustAge(w),
     oldestCrust(w),
     highestPeak(w, G),
@@ -117,31 +122,69 @@ function hypsometry(w: World): Metric {
     display: `${p.land >= 0 ? '+' : ''}${kmh(p.land)} / ${kmh(p.ocean)}`,
     band: 'land peak −0.5–1.5 km, ocean peak −6.5 to −2.5 km',
     failIf: 'no separate land and ocean peaks',
-    earth: '~+0.1 km and ~−4.5 km',
+    earth: '+0.1 km and −4.6 km',
     status: status(!p.bimodal, inBand),
     note: p.bimodal ? undefined : 'Heights form one hump: continents and ocean floor are not distinct.',
   };
 }
 
-function meanLandElevation(w: World, G: number): Metric {
-  let sum = 0, area = 0;
-  for (let c = 0; c < w.grid.count; c++) {
-    if (w.elevation[c] > 0) {
-      sum += w.elevation[c] * w.grid.area[c];
-      area += w.grid.area[c];
-    }
-  }
-  const v = area > 0 ? sum / area : 0;
-  const lo = 200 * G, hi = 2000 * G;
+// Earth values below are measured, not quoted: ETOPO sampled onto this hex
+// grid and run through the same code (scripts/earth-ref.ts), leaving the
+// ice sheets out of the height statistics (their surface is ice).
+
+function meanLandElevation(s: LandShape, G: number): Metric {
+  const v = s.meanM;
+  const lo = 350 * G, hi = 1500 * G;
   return {
     id: 'land-mean',
     label: 'Mean land height',
     value: v,
-    display: `${Math.round(v).toLocaleString('en-US')} m`,
+    display: `${Math.round(v).toLocaleString('en-US')} m (median ${Math.round(s.medianM)})`,
     band: `${Math.round(lo)}–${Math.round(hi).toLocaleString('en-US')} m`,
     failIf: '—',
-    earth: '~840 m',
+    earth: '665 m, median 390 (ice-free)',
     status: status(false, v >= lo && v <= hi),
+  };
+}
+
+function highGround(s: LandShape, G: number): Metric {
+  const pct = (x: number) => `${(100 * x).toFixed(x < 0.1 ? 1 : 0)}%`;
+  return {
+    id: 'high-ground',
+    label: 'High ground',
+    value: s.above1k,
+    display: `${pct(s.above1k)} of land above ${kmh(1000 * G)}, ${pct(s.above2k)} above ${kmh(2000 * G)}`,
+    band: `8–45% above ${kmh(1000 * G)}, 1.5–20% above ${kmh(2000 * G)}`,
+    failIf: `under 3% above ${kmh(1000 * G)} (no mountains)`,
+    earth: '20% above 1 km, 5.5% above 2 km',
+    status: status(s.above1k < 0.03, s.above1k >= 0.08 && s.above1k <= 0.45 && s.above2k >= 0.015 && s.above2k <= 0.2),
+    note: s.above1k < 0.08 ? 'The land is nearly flat: mountain building is not keeping up with erosion.' : undefined,
+  };
+}
+
+function landInterior(s: LandShape): Metric {
+  return {
+    id: 'interior',
+    label: 'Land far from the sea',
+    value: s.interior,
+    display: `${Math.round(100 * s.interior)}% of land over ${km(s.interiorKm)} inland`,
+    band: '35–90%',
+    failIf: 'under 15% (land is strips and strings)',
+    earth: '61–66%',
+    status: status(s.interior < 0.15, s.interior >= 0.35 && s.interior <= 0.9),
+  };
+}
+
+function landScraps(s: LandShape): Metric {
+  return {
+    id: 'scraps',
+    label: 'Land in small pieces',
+    value: s.scraps,
+    display: `${(100 * s.scraps).toFixed(1)}% of land in pieces under 0.2% of the surface`,
+    band: '0–12%',
+    failIf: 'over 30% (land is shattered)',
+    earth: '~3%',
+    status: status(s.scraps > 0.3, s.scraps <= 0.12),
   };
 }
 
@@ -259,7 +302,7 @@ function highestPeak(w: World, G: number): Metric {
     display: kmh(v),
     band: `${kmh(0.3 * cap)}–${kmh(0.85 * cap)}`,
     failIf: `above ${kmh(cap)} (gravity limit)`,
-    earth: '~6 km (summit 8.8 km)',
+    earth: '5.7–6.0 km (summit 8.8 km)',
     status: status(v > cap * 1.001, v >= 0.3 * cap && v <= 0.85 * cap),
     note: v < 0.3 * cap ? 'No major mountain range formed.' : undefined,
   };
@@ -276,7 +319,7 @@ function deepestTrench(w: World, G: number): Metric {
     display: kmh(v),
     band: `${kmh(6000 * g)}–${kmh(11000 * g)}`,
     failIf: `deeper than ${kmh(14000 * g)}`,
-    earth: '~8.5 km (point 11.0 km)',
+    earth: '7.7–9.0 km (point 11.0 km)',
     status: status(v > 14000 * g, v >= 6000 * g && v <= 11000 * g),
   };
 }
@@ -402,9 +445,9 @@ function mountainBelts(w: World, G: number): Metric {
       label: 'Mountain belts',
       value: null,
       display: 'none',
-      band: '100–1,500 km wide',
-      failIf: 'wider than ~2,000 km',
-      earth: 'Andes ~300 km, Tibet ~1,000 km',
+      band: 'up to 2,500 km wide',
+      failIf: 'wider than 3,500 km',
+      earth: 'median ~100–280 km, widest ~2,050 km (Tibet)',
       status: 'warn',
       note: `No land above ${kmh(1500 * G)} forms a belt.`,
     };
@@ -417,10 +460,10 @@ function mountainBelts(w: World, G: number): Metric {
     label: 'Mountain belts',
     value: widest,
     display: `${widths.length} belts, median ${km(median)}, widest ${km(widest)}`,
-    band: '100–1,500 km wide',
-    failIf: 'wider than ~2,000 km',
-    earth: 'Andes ~300 km, Tibet ~1,000 km',
-    status: status(widest > 2000, widest <= 1500 && median >= 50),
+    band: 'median over 50 km, widest up to 2,500 km',
+    failIf: 'wider than 3,500 km',
+    earth: 'median ~100–280 km, widest ~2,050 km (Tibet)',
+    status: status(widest > 3500, widest <= 2500 && median >= 50),
   };
 }
 
@@ -471,7 +514,7 @@ function shelfWidth(w: World): Metric {
     display: `${km(v)} mean width`,
     band: '0–400 km',
     failIf: '—',
-    earth: '~80 km mean',
+    earth: '61–66 km mean',
     status: status(false, v <= 400),
   };
 }

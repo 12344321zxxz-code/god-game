@@ -67,13 +67,40 @@ const MAX_THICK_EARTH: f32 = 95.0;
 // ---- force constants (relative; overall speed is normalised) ----
 const K_SLAB: f64 = 1.0;
 const K_GPE: f64 = 0.012;
-const K_COLL: f64 = 30.0;
+const K_COLL: f64 = 3.0;
 /// Basal drag weight of continental lithosphere relative to oceanic (deep keels).
 const DRAG_CONT: f64 = 2.0;
 /// Timescale (Myr) on which the ocean volume relaxes toward the land target.
 const WATER_RELAX_MYR: f64 = 150.0;
 /// Sea floor older than this (Myr) starts to founder at plate edges.
 const INIT_CHECK_MYR: f64 = 10.0;
+/// After a breakaway neither plate starts another for this long (Myr).
+const INIT_QUIET_MYR: f64 = 40.0;
+/// Oceanic crust plus sediment thicker than this (km) counts as
+/// continental basin crust.
+const BASIN_TO_CONT: f32 = 20.0;
+/// Crust thicker than this flows at depth and spreads sideways: what
+/// flattens Tibet and the Altiplano into plateaus (60–70 km thick, 4–5 km
+/// high) instead of letting them grow higher.
+const FLOW_ONSET_KM: f32 = 62.0;
+/// Plume swell under continents relative to oceans. Continental domes are
+/// as high as oceanic swells or higher (Ethiopia/East Africa, Hoggar,
+/// Tibesti: 1–2 km over ~1000 km; Hawaii: ~1.2 km).
+const CONT_SWELL: f64 = 1.0;
+/// Local relief (what Ahnert's erosion law uses) is at most this share of
+/// a range's height: valleys are cut into the range, not down to sea
+/// level (about a third of the height in mountains, far less on
+/// plateaus). With isostasy a dead range then decays with an e-folding
+/// time of ~150 Myr — the Appalachians and Urals, ~300 Myr old, still
+/// stand near 1 km.
+const RELIEF_SHARE: f64 = 0.25;
+/// Collision shortening: e-folding width behind the suture, how far it can
+/// reach, and the crust thickness the belt holds before growing outward
+/// (Tibet: ~70 km; scaled with relief like the other limits).
+const COLL_WIDTH_KM: f64 = 300.0;
+const COLL_REACH_KM: f32 = 1200.0;
+const COLL_THICK_BASE: f64 = 35.0;
+const COLL_THICK_EARTH: f64 = 70.0;
 const FOUNDER_AGE: f32 = 150.0;
 /// Clock (Myr) of the slow surface processes (uplift, flow, erosion, hot spots).
 const PROC_DT: f64 = 1.0;
@@ -123,15 +150,40 @@ pub fn crust_elev(thick: f32, age: f32, cont: u8, sea: f64) -> f64 {
     }
 }
 
+/// A continental collision between two plates.
+#[derive(Clone, Copy, Default)]
+struct Collision {
+    /// Continental crust consumed lately (sr, fading over ~30 Myr): the
+    /// collision's current vigour.
+    recent: f64,
+    /// Highest `recent` so far.
+    peak: f64,
+    /// All crust consumed so far (sr).
+    total: f64,
+    /// How long (Myr) the vigour has been under half its peak.
+    waning: f64,
+}
+
 /// A patch of mantle flow that drags the plates above it (convection cell).
 struct MantleCell {
     centre: V3,
     /// Rotation (rad/Myr) of the flow under this patch.
     omega: V3,
+    /// Angular radius (rad).
+    radius: f64,
+    /// Lasting convection cell (wanders for ever) or the fading flow of
+    /// an upwelling that broke a continent.
+    lasting: bool,
 }
 
-/// Typical speed of the mantle flow under the plates, mm/yr.
-const MANTLE_FLOW: f64 = 18.0;
+/// Typical speed of the mantle flow under the plates, mm/yr (at the default
+/// mantle vigour of 35 mm/yr mean plate speed; scales with it).
+const MANTLE_FLOW: f64 = 30.0;
+/// Mantle flow away from a fresh continental rift: speed (mm/yr) and how
+/// long it lasts (e-folding, Myr). The Atlantic has opened ~40 mm/yr for
+/// 150 Myr.
+const RIFT_DRIVE: f64 = 20.0;
+const RIFT_DRIVE_MYR: f64 = 80.0;
 /// Angular radius (rad) of a mantle-flow patch.
 const MANTLE_CELL_RADIUS: f64 = 0.9;
 
@@ -166,6 +218,10 @@ pub struct Stats {
     /// Continental crust volume budget (sr·km): subduction, rift, hot spot,
     /// erosion, deposition, collision stacking, flow.
     pub budget: [f64; 7],
+    /// Debug (TECTO_ADV): cell·Myr of active continental margin by how fast
+    /// the upper plate advances on the trench (<−10, −10…2, 2…10, 10…25,
+    /// >25 mm/yr), then Σ dt·convergence and Σ dt.
+    pub adv_hist: [f64; 8],
 }
 
 /// Multi-source Dijkstra over the grid with reusable buffers.
@@ -267,6 +323,8 @@ pub struct Sim {
     // mantle-frame fields that persist between steps
     trench: Vec<f32>,
     swell: Vec<f32>,
+    /// Continental crust driven into a collision this step (km·sr), per world cell.
+    coll_in: Vec<f32>,
     slab: Vec<f32>,
     slab_pid: Vec<u32>,
     sz: Vec<f32>,
@@ -276,7 +334,8 @@ pub struct Sim {
     cz_top: Vec<u32>,
     hotspots: Vec<Hotspot>,
     mantle: Vec<MantleCell>,
-    pair_coll: BTreeMap<(u32, u32), f64>,
+    /// Collisions between pairs of plates (by id).
+    pair_coll: BTreeMap<(u32, u32), Collision>,
 
     dij: Dijkstra,
     order: Vec<u32>,
@@ -339,6 +398,7 @@ impl Sim {
             oro_set: vec![0; n],
             trench: vec![0.0; n],
             swell: vec![0.0; n],
+            coll_in: vec![0.0; n],
             slab: vec![0.0; n],
             slab_pid: vec![NONE; n],
             sz: vec![0.0; n],
@@ -395,8 +455,8 @@ impl Sim {
         self.rebuild_ids();
         self.init_hotspots();
         let mut r = Rng::stream(self.prm.seed, "mantle");
-        let k = MANTLE_FLOW / self.prm.radius;
-        self.mantle = (0..6).map(|_| MantleCell { centre: r.unit_vec(), omega: scale(r.unit_vec(), k) }).collect();
+        let k = MANTLE_FLOW * self.vigour() / self.prm.radius;
+        self.mantle = (0..6).map(|_| MantleCell { centre: r.unit_vec(), omega: scale(r.unit_vec(), k), radius: MANTLE_CELL_RADIUS, lasting: true }).collect();
         self.update_bounds();
         self.refresh_view();
         // The ocean holds a fixed amount of water: enough to leave the
@@ -477,6 +537,12 @@ impl Sim {
             ae += self.g.area[c] * e;
         }
         (self.water + ae) / a
+    }
+
+    /// Mantle vigour relative to the default (the Mantle vigour slider):
+    /// the flow under the plates scales with it, like the plates' own speeds.
+    fn vigour(&self) -> f64 {
+        self.prm.mean_speed / 35.0
     }
 
     fn rebuild_ids(&mut self) {
@@ -597,8 +663,9 @@ impl Sim {
         }
         let kp = (-dt / 30.0).exp();
         self.pair_coll.retain(|_, v| {
-            *v *= kp;
-            *v > 1e-6
+            v.recent *= kp;
+            v.waning = if v.recent < 0.5 * v.peak { v.waning + dt } else { 0.0 };
+            v.recent > 1e-6
         });
     }
 
@@ -796,7 +863,6 @@ impl Sim {
     /// columns under another plate's crust are subducted or, if continental
     /// under continental, stacked onto the upper plate.
     fn local_pass(&mut self, dt: f64) {
-        let mut transfers: Vec<(usize, u32, f32)> = vec![];
         let g = &self.g;
         let rk = self.prm.radius;
         let omegas: Vec<V3> = self.plates.iter().map(|p| p.omega).collect();
@@ -853,12 +919,23 @@ impl Sim {
                     if self.cont_w[c] == 0 {
                         continue; // a continent never goes under ocean (edge jitter)
                     }
-                    transfers.push((o as usize, self.oslot[c], p.thick[s]));
-                    self.cz[c] = 1.0;
+                    // its crust is shortened into the upper plate (see collision_belts)
+                    self.coll_in[c] += p.thick[s] * g.area[c] as f32;
+                    // A stretched margin (thin crust) is dragged down with
+                    // little resistance; full-thickness crust is too buoyant
+                    // and jams the trench. So the margins between two
+                    // continents are used up before the collision proper
+                    // starts, and the suture is a mountain belt, not a
+                    // leftover shallow sea.
+                    let hard = smoothstep(26.0, 34.0, p.thick[s] as f64);
+                    self.cz[c] = self.cz[c].max(hard as f32);
                     self.cz_low[c] = pid;
                     self.cz_top[c] = self.owner_id[c];
                     let key = if pid < self.owner_id[c] { (pid, self.owner_id[c]) } else { (self.owner_id[c], pid) };
-                    *self.pair_coll.entry(key).or_insert(0.0) += g.area[c];
+                    let e = self.pair_coll.entry(key).or_default();
+                    e.recent += hard * g.area[c];
+                    e.total += hard * g.area[c];
+                    e.peak = e.peak.max(e.recent);
                     p.remove(s);
                 } else {
                     let f = (p.age[s] as f64 / 80.0).clamp(0.1, 1.0);
@@ -869,17 +946,6 @@ impl Sim {
                     self.stats.subducted_area += g.area[c];
                     p.remove(s);
                 }
-            }
-        }
-        for (o, ts, add) in transfers {
-            let p = &mut self.plates[o];
-            let ts = ts as usize;
-            if p.alive[ts] {
-                let before = p.thick[ts];
-                p.thick[ts] = (p.thick[ts] + add).min(self.max_thick);
-                self.stats.budget[5] += (p.thick[ts] - before) as f64 * self.g.area[p.cell[ts] as usize];
-                p.oro[ts] = oro::HIMALAYAN;
-                p.oro_age[ts] = 0.0;
             }
         }
     }
@@ -946,7 +1012,10 @@ impl Sim {
                 let ridge = rate > MIN_RATE && self.rng.f() < rate * dt / cell_km;
                 // enclosed by this plate alone → a hole in its crust (nearest-cell
                 // sampling of freshly made or merged crust skips ~1 cell in 10)
-                let enclosed = self.g.nb(c).iter().all(|&d| self.owner[d as usize] == pi as i32);
+                // (neighbours that were themselves gaps a moment ago don't
+                // count: the middle of a wide opening is not a hole, and
+                // copying crust into it filled rifts with continent)
+                let enclosed = self.g.nb(c).iter().all(|&d| self.owner[d as usize] == pi as i32 && self.cand_n[d as usize] > 0);
                 let p = &mut self.plates[pi];
                 let r = self.g.nearest(p.q.conj().rotate(self.g.pos[c]));
                 let s = if p.slot_of[r] != EMPTY {
@@ -957,7 +1026,11 @@ impl Sim {
                 } else if enclosed {
                     let ds = self.oslot[donor.unwrap()] as usize;
                     let (t, a, k, o, oa) = (p.thick[ds], p.age[ds], p.cont[ds], p.oro[ds], p.oro_age[ds]);
-                    self.stats.copy_cont += self.g.area[c];
+                    // (only continental copies are counted: holes in fresh
+                    // sea floor are routine)
+                    if k != 0 {
+                        self.stats.copy_cont += self.g.area[c];
+                    }
                     p.add(r, c, t, a, k, o, oa)
                 } else {
                     // rounding gap at an edge: show the neighbouring column, change nothing
@@ -1079,6 +1152,13 @@ impl Sim {
             // plate that advances on the trench is shortened (Andes); one
             // that moves away stretches its back-arc (Marianas, Japan Sea)
             adv_of.push(dot(self.vel(self.owner[c] as usize, c), nrm) as f32);
+            if flag("TECTO_ADV") && self.cont_w[c] != 0 && conv > 15.0 {
+                let adv = dot(self.vel(self.owner[c] as usize, c), nrm);
+                let bin = if adv < -10.0 { 0 } else if adv < 2.0 { 1 } else if adv < 10.0 { 2 } else if adv < 25.0 { 3 } else { 4 };
+                self.stats.adv_hist[bin] += dt;
+                self.stats.adv_hist[5] += dt * conv;
+                self.stats.adv_hist[6] += dt;
+            }
             // trench depth grows with convergence: slow boundaries barely
             // flex the plate, fast ones (≥ 50 mm/yr) 3–4 km deep
             let depth = (4.0 * smoothstep(5.0, 50.0, conv) * relief.min(1.5)) as f32;
@@ -1090,7 +1170,7 @@ impl Sim {
         if !sources.is_empty() {
             let owner = &self.owner;
             let src_owner: Vec<i32> = sources.iter().map(|&c| owner[c as usize]).collect();
-            self.dij.run(&self.g, rk, &sources, 360.0, |d, si| owner[d] == src_owner[si]);
+            self.dij.run(&self.g, rk, &sources, 420.0, |d, si| owner[d] == src_owner[si]);
             let tmax = 35.0 + 30.0 * relief.sqrt();
             // Cordillera growth: magmatic addition plus tectonic shortening.
             // A rigid plate cannot shorten, and taking the volume from
@@ -1115,9 +1195,18 @@ impl Sim {
                     // the upper plate advances on the trench (Uyeda &
                     // Kanamori; Lamb & Davis): Andes, not Cascades — so
                     // most margins carry an arc, few a high range.
-                    let push = (adv_of[si] as f64 - 5.0).max(0.0) * dt / 30.0;
-                    let shape = smoothstep(40.0, 110.0, x) * (1.0 - smoothstep(220.0, 340.0, x));
-                    let short = 1.1 * shape * ((tmax - h) / 30.0).clamp(0.0, 1.0) * push.min(k * 2.0);
+                    // About a quarter of the upper plate's advance is taken up
+                    // by shortening (Andes: ~10 of ~30–45 mm/yr), the rest by
+                    // trench retreat; spread over the ~250 km-wide belt that is
+                    // ~0.25·v·H/250 ≈ 0.038 km of crust per Myr per mm/yr.
+                    // Inherited structure makes some stretches of a margin
+                    // shorten far more than others (segments fixed to the plate).
+                    let pl = &self.plates[self.owner[d] as usize];
+                    let lp = self.g.pos[pl.cell[self.oslot[d] as usize] as usize];
+                    let seg = (1.0 + 2.2 * self.noise.fbm(lp, 4.0, 2)).clamp(0.1, 2.2);
+                    let push = 0.038 * seg * (adv_of[si] as f64 - 2.0).max(0.0) * dt;
+                    let shape = smoothstep(40.0, 110.0, x) * (1.0 - smoothstep(240.0, 400.0, x));
+                    let short = shape * ((tmax - h) / 30.0).clamp(0.0, 1.0) * push.min(k * 2.0);
                     // subduction erosion scrapes the forearc (≈ as much as arcs add)
                     let scrape = 0.5 * (-(x / 60.0).powi(2)).exp() * k;
                     arc + short - scrape
@@ -1156,9 +1245,94 @@ impl Sim {
         }
     }
 
-    /// Marks collision belts (the thickening itself came from stacked crust).
+    /// Continental crust that went under another continent this step is
+    /// shortened into the upper plate. Continental lithosphere is weak: the
+    /// shortening spreads hundreds of km behind the suture (Tibet, Tian
+    /// Shan and the Alps' forelands, not a single line of peaks), fading
+    /// with distance and moving outward as the belt nearest the suture
+    /// reaches the thickness the crust can hold. Volume is conserved.
+    fn collision_belts(&mut self) {
+        let n = self.g.n;
+        // (crust queued at a cell that is no longer continent — a suture
+        // leftover whose cell changed hands — has nowhere to go and is dropped)
+        let src: Vec<u32> = (0..n as u32)
+            .filter(|&c| self.coll_in[c as usize] > 0.0 && self.owner[c as usize] >= 0 && self.cont_w[c as usize] != 0)
+            .collect();
+        if src.is_empty() {
+            self.coll_in.fill(0.0);
+            return;
+        }
+        let rk = self.r();
+        let hold = COLL_THICK_BASE + (COLL_THICK_EARTH - COLL_THICK_BASE) * self.prm.relief().sqrt();
+        let owner = &self.owner;
+        let cont = &self.cont_w;
+        let so: Vec<i32> = src.iter().map(|&c| owner[c as usize]).collect();
+        self.dij.run(&self.g, rk, &src, COLL_REACH_KM, |d, si| owner[d] == so[si] && cont[d] != 0);
+        // One belt = the connected ground reached from one stretch of
+        // suture. Its crust is pooled: sharing it out source by source would
+        // leave a source with another right behind it nothing but its own
+        // cell to thicken.
+        let mut belt = vec![u32::MAX; n];
+        let mut vol: Vec<f64> = vec![];
+        let mut wsum: Vec<f64> = vec![];
+        let mut stack: Vec<u32> = vec![];
+        let weight = |sim: &Sim, d: usize| -> f64 {
+            let x = sim.dij.dist[d] as f64;
+            let h = (sim.thick_w[d] + sim.dthick[d]) as f64;
+            (-x / COLL_WIDTH_KM).exp() * ((hold - h) / 15.0).clamp(0.03, 1.0) * sim.g.area[d]
+        };
+        for i in 0..self.dij.touched.len() {
+            let d0 = self.dij.touched[i] as usize;
+            if belt[d0] != u32::MAX {
+                continue;
+            }
+            let k = vol.len() as u32;
+            let (mut v, mut w) = (0.0, 0.0);
+            belt[d0] = k;
+            stack.push(d0 as u32);
+            while let Some(d) = stack.pop() {
+                let d = d as usize;
+                w += weight(self, d);
+                if self.dij.dist[d] == 0.0 {
+                    v += self.coll_in[d] as f64;
+                }
+                for &e in self.g.nb(d) {
+                    let e = e as usize;
+                    if belt[e] == u32::MAX && self.dij.dist[e].is_finite() && self.owner[e] == self.owner[d] {
+                        belt[e] = k;
+                        stack.push(e as u32);
+                    }
+                }
+            }
+            vol.push(v);
+            wsum.push(w);
+        }
+        for i in 0..self.dij.touched.len() {
+            let d = self.dij.touched[i] as usize;
+            let k = belt[d] as usize;
+            if wsum[k] <= 0.0 {
+                continue;
+            }
+            // (thickness before this step for every cell: collect, then apply)
+            self.work[d] = (vol[k] * weight(self, d) / wsum[k] / self.g.area[d]) as f32;
+        }
+        for i in 0..self.dij.touched.len() {
+            let d = self.dij.touched[i] as usize;
+            let add = self.work[d];
+            self.work[d] = 0.0;
+            self.dthick[d] += add;
+            self.stats.budget[5] += add as f64 * self.g.area[d];
+            if add > 0.02 {
+                self.oro_set[d] = oro::HIMALAYAN;
+            }
+        }
+        self.coll_in.fill(0.0);
+    }
+
+    /// Marks collision belts (the thickening itself is done in collision_belts).
     fn collision_marks(&mut self) {
         let n = self.g.n;
+        self.collision_belts();
         let mut top_src = vec![];
         let mut low_src = vec![];
         for c in 0..n {
@@ -1263,7 +1437,7 @@ impl Sim {
                 let x = angle(self.g.pos[c], hp) * rk;
                 // dynamic uplift: a broad ~1 km swell under oceans, weaker under
                 // thick continental lithosphere
-                let damp = if self.cont_w[c] != 0 { 0.4 } else { 1.0 };
+                let damp = if self.cont_w[c] != 0 { CONT_SWELL } else { 1.0 };
                 self.swell[c] += (damp * swell_amp * (-(x / 450.0).powi(2)).exp()) as f32;
                 if x < 3.0 * r_eff {
                     // thick continental lithosphere lets little melt through
@@ -1330,11 +1504,11 @@ impl Sim {
         // >55 km). Letting ordinary 42 km crust flow smeared every range
         // into a broad, low rim within a few Myr.
         let k_ch = 4000.0 * self.prm.gravity.min(2.0);
-        let phi = |x: f32| (((x - 55.0) / 20.0).clamp(0.0, 1.6) as f64).powi(2);
+        let phi = |x: f32| (((x - FLOW_ONSET_KM) / 15.0).clamp(0.0, 1.6) as f64).powi(2);
         let active: Vec<u32> = (0..n as u32)
             .filter(|&c| {
                 let c = c as usize;
-                self.cont_w[c] != 0 && (h[c] > 55.0 || self.g.nb(c).iter().any(|&d| h[d as usize] > 55.0))
+                self.cont_w[c] != 0 && (h[c] > FLOW_ONSET_KM || self.g.nb(c).iter().any(|&d| h[d as usize] > FLOW_ONSET_KM))
             })
             .collect();
         if !active.is_empty() {
@@ -1427,7 +1601,7 @@ impl Sim {
                 // (slopes under ~3 m/km are plains — at 60 km cells they are
                 // mostly cell-to-cell noise, and letting them count wore the
                 // cratons down five times faster than Earth's)
-                let relief = (0.015 * e + 80.0 * (slope - 0.003).max(0.0)).min(e);
+                let relief = (0.015 * e + 80.0 * (slope - 0.003).max(0.0)).min(RELIEF_SHARE * e);
                 let rock = (k * relief * dt).min(0.5 * e / 0.1515); // km of crust
                 self.dthick[c] -= rock as f32;
                 if self.cont_w[c] != 0 {
@@ -1513,6 +1687,14 @@ impl Sim {
                     self.stats.cont_lost += self.g.area[p.cell[s] as usize];
                     p.cont[s] = 0;
                     p.age[s] = RIFTED_OCEAN_AGE;
+                } else if p.cont[s] == 0 && p.thick[s] > BASIN_TO_CONT && p.age[s] > 50.0 {
+                    // Old sea floor buried under ~13 km or more of sediment (a
+                    // trapped basin like the Caspian, or the foot of a big
+                    // delta) no longer behaves as oceanic plate: too buoyant
+                    // to sink, it is from here on the floor of a
+                    // continental basin, and fills up like one.
+                    p.cont[s] = 1;
+                    self.stats.conv_arc += self.g.area[p.cell[s] as usize];
                 } else if p.cont[s] == 0
                     && p.thick[s] > ARC_TO_CONT
                     && p.oro_age[s] < 10.0
@@ -1541,14 +1723,21 @@ impl Sim {
         self.compute_elev();
         // mantle flow drifts slowly (≈150 Myr memory)
         {
-            let k = MANTLE_FLOW / self.prm.radius;
+            let k = MANTLE_FLOW * self.vigour() / self.prm.radius;
             let a = (-dt / 150.0).exp();
             let b = (1.0 - a * a).sqrt();
+            let fade = (-dt / RIFT_DRIVE_MYR).exp();
+            let floor = 0.05 * RIFT_DRIVE * self.vigour() / self.prm.radius;
             for mc in &mut self.mantle {
+                if !mc.lasting {
+                    mc.omega = scale(mc.omega, fade);
+                    continue;
+                }
                 let kick = scale(self.rng.unit_vec(), k * self.rng.normal().abs());
                 mc.omega = add(scale(mc.omega, a), scale(kick, b));
                 mc.centre = normalize(add(mc.centre, scale(self.rng.unit_vec(), 0.05 * dt.sqrt())));
             }
+            self.mantle.retain(|mc| mc.lasting || len(mc.omega) > floor);
         }
         for c in 0..n {
             let o = self.owner[c];
@@ -1563,7 +1752,7 @@ impl Sim {
             for mc in &self.mantle {
                 // Gaussian in chord distance (≈ angle for the sizes used)
                 let d2 = 2.0 - 2.0 * dot(p, mc.centre);
-                let g = (-d2 / (MANTLE_CELL_RADIUS * MANTLE_CELL_RADIUS)).exp();
+                let g = (-d2 / (mc.radius * mc.radius)).exp();
                 om = add(om, scale(mc.omega, g));
             }
             for i in 0..3 {
@@ -1764,10 +1953,13 @@ impl Sim {
                 if f < 0.012 || p.age_myr < 25.0 {
                     continue;
                 }
-                // An ordinary continent rifts about once in 500 Myr; a
-                // supercontinent (heat trapped beneath it) within a few tens
-                // of Myr. Rifting any more often shreds continents.
-                let lambda = self.prm.rift_rate * (1.0 / 500.0 + smoothstep(0.15, 0.30, f) / 40.0);
+                // Big continents trap mantle heat and rift; small ones rarely
+                // do. A large continent (Africa, Eurasia: 6–10 % of the
+                // surface) rifts about once in 500 Myr, a small one (Australia:
+                // under 2 %) about once in 2 Gyr, a supercontinent within a few
+                // tens of Myr. More than that and rifts outrun collisions:
+                // the land ends up in ever more, ever smaller pieces.
+                let lambda = self.prm.rift_rate * (1.0 / 2000.0 + smoothstep(0.02, 0.08, f) / 650.0 + smoothstep(0.15, 0.30, f) / 40.0);
                 if self.rng.f() < lambda * dt {
                     chosen = Some(i);
                     break;
@@ -1788,17 +1980,48 @@ impl Sim {
         }
         // (3) suturing
         let mut merge = None;
-        for (&(a, b), &v) in &self.pair_coll {
+        let mut ended = None;
+        for (&(a, b), v) in &self.pair_coll {
             let (Some(ia), Some(ib)) = (self.idx(a), self.idx(b)) else { continue };
-            // suture once a good share of the smaller continent has been driven in
-            let thr = (0.3 * self.plates[ia].cont_area.min(self.plates[ib].cont_area)).clamp(0.003, 0.08);
-            if v > thr {
-                merge = Some((ia, ib, a, b));
-                break;
+            // Two continents weld into one plate when their collision dies
+            // down — not at a set amount of shortening: India has driven
+            // ~2000 km into Asia and is still going, the Urals stopped early.
+            // A real collision (not a glancing touch) whose vigour has fallen
+            // to half its peak is over. Driving in the whole smaller
+            // continent ends it too.
+            let small = self.plates[ia].cont_area.min(self.plates[ib].cont_area);
+            // (at least a handful of cells, and a lull that lasts, so the
+            // dice of a slow, short front don't decide it)
+            let real = (0.1 * small).clamp(0.0005, 0.003).max(8.0 * TAU / self.g.n as f64);
+            let waned = v.peak > real && v.waning > 10.0;
+            if !(waned || v.total > small.clamp(0.01, 0.25)) {
+                continue;
             }
+            // still touching? A collision that ended because the plates
+            // moved apart (or one of them rifted) welds nothing.
+            let mut contact = 0;
+            for c in 0..self.g.n {
+                if self.cont_w[c] == 0 || self.owner_id[c] != a {
+                    continue;
+                }
+                contact += self.g.nb(c).iter().filter(|&&d| self.owner_id[d as usize] == b && self.cont_w[d as usize] != 0).count();
+            }
+            if contact >= 3 {
+                merge = Some((ia, ib, a, b));
+            } else {
+                ended = Some((a, b));
+            }
+            break;
+        }
+        if let Some(key) = ended {
+            self.pair_coll.remove(&key);
         }
         if let Some((ia, ib, a, b)) = merge {
             let (keep, gone) = if self.plates[ia].area >= self.plates[ib].area { (ia, ib) } else { (ib, ia) };
+            if std::env::var("TECTO_DEBUG").is_ok() {
+                let v = self.pair_coll[&(a, b)];
+                eprintln!("t={:.0} suture: consumed {:.4} sr (peak {:.4}, recent {:.4}), continents {:.3} and {:.3} sr", self.time, v.total, v.peak, v.recent, self.plates[ia].cont_area, self.plates[ib].cont_area);
+            }
             self.pair_coll.remove(&(a, b));
             self.merge(keep, gone, true);
             self.stats.merges += 1;
@@ -1881,12 +2104,34 @@ impl Sim {
                 }
                 let p = &self.plates[pi];
                 let slots: Vec<usize> = cells[k].iter().map(|&r| p.slot_of[r as usize]).filter(|&t| t != EMPTY).map(|t| t as usize).collect();
-                let (omega, age, id) = (p.omega, p.age_myr, p.id);
+                // a small piece joins the plate it borders most (by the
+                // view); only a large one carries on as a plate of its own
+                let mut into = None;
+                if a < 4.0 * min_area {
+                    let mut border: BTreeMap<u32, u32> = BTreeMap::new();
+                    for &s in &slots {
+                        for &d in self.g.nb(p.world[s] as usize) {
+                            let o = self.owner_id[d as usize];
+                            if o != NONE && o != p.id {
+                                *border.entry(o).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                    into = border.iter().max_by_key(|(id, v)| (**v, std::cmp::Reverse(**id))).map(|(id, _)| *id);
+                }
+                let (omega, age, id, quiet) = (p.omega, p.age_myr, p.id, p.quiet_until);
                 if let Some(ni) = self.split(pi, &slots, omega) {
                     self.plates[ni].age_myr = age;
+                    self.plates[ni].quiet_until = quiet;
                     changed = true;
                     if std::env::var("TECTO_DEBUG").is_ok() {
                         eprintln!("t={:.0} detached piece of id {} ({:.4} sr)", self.time, id, a);
+                    }
+                    if let Some(keep) = into.and_then(|t| self.idx(t)) {
+                        if keep != ni {
+                            // (ni is the last plate, so no index shifts)
+                            self.merge(keep, ni, false);
+                        }
                     }
                 }
             }
@@ -2021,8 +2266,10 @@ impl Sim {
             } else {
                 let ts = ts as usize;
                 if b.cont[sb] != 0 && a.cont[ts] != 0 {
-                    // continent under continent at the suture: stacked crust
-                    a.thick[ts] = (a.thick[ts] + 0.5 * b.thick[sb]).min(self.max_thick);
+                    // continent still under continent at the suture: shortened
+                    // into the belt like the rest of the collision (stacking it
+                    // on the spot left single cells 80–90 km thick)
+                    self.coll_in[a.world[ts] as usize] += b.thick[sb] * g.area[r] as f32;
                 } else if b.cont[sb] != 0 {
                     a.thick[ts] = b.thick[sb];
                     a.cont[ts] = 1;
@@ -2126,6 +2373,22 @@ impl Sim {
         self.plates[pi].age_myr = 0.0;
         self.plates[ni].age_myr = 0.0;
         self.plates[pi].omega = sub(w0, scale(axis, k));
+        if continental {
+            // What breaks a continent keeps pushing: the upwelling under the
+            // rift spreads sideways and carries the two halves apart for tens
+            // of Myr. Without it the first push died in a few Myr and the
+            // rift stalled as a long, narrow sea — and the next rift cut
+            // another strip beside it.
+            let kd = RIFT_DRIVE * self.vigour() / rk;
+            for sgn in [1.0, -1.0] {
+                self.mantle.push(MantleCell {
+                    centre: normalize(add(cc, scale(nrm, sgn * 0.35))),
+                    omega: scale(axis, sgn * kd),
+                    radius: 0.45,
+                    lasting: false,
+                });
+            }
+        }
         true
     }
 
@@ -2199,6 +2462,11 @@ impl Sim {
         let start = self.rng.below(np);
         for k in 0..np {
             let pi = (start + k) % np;
+            // one breakaway at a time: a plate that has just shed old floor
+            // (or is that floor) is left alone while the new trench works
+            if self.time < self.plates[pi].quiet_until {
+                continue;
+            }
             let mut oldest = (0.0f32, usize::MAX);
             let mut conts = vec![];
             for c in 0..n {
@@ -2277,9 +2545,12 @@ impl Sim {
             if area < 0.0016 * TAU {
                 continue;
             }
+            let quiet = self.time + INIT_QUIET_MYR;
             if !margin && area > 0.85 * parea {
                 // the whole plate is old: break it and let one half sink under the other
                 if self.rift(pi, false, true) {
+                    self.plates[pi].quiet_until = quiet;
+                    self.plates.last_mut().unwrap().quiet_until = quiet;
                     return true;
                 }
                 continue;
@@ -2302,7 +2573,13 @@ impl Sim {
             let p = &self.plates[pi];
             let slots: Vec<usize> = p.slots().filter(|&s| self.mark[p.world[s] as usize] == st).collect();
             let omega = add(p.omega, scale(axis, kk));
-            return self.split(pi, &slots, omega).is_some();
+            let Some(ni) = self.split(pi, &slots, omega) else { return false };
+            // (a continent's plate may shed other old stretches meanwhile)
+            if !margin {
+                self.plates[pi].quiet_until = quiet;
+            }
+            self.plates[ni].quiet_until = quiet;
+            return true;
         }
         false
     }
@@ -2494,6 +2771,16 @@ impl Sim {
                 }
             }
         }
+        // very old floor: how thick (sediment-laden) and deep is it?
+        let (mut o3a, mut o3t, mut o3e) = (0.0, 0.0, 0.0);
+        for c in 0..n {
+            if self.cont_w[c] == 0 && self.age_w[c] > 300.0 {
+                o3a += self.g.area[c];
+                o3t += self.g.area[c] * self.thick_w[c] as f64;
+                o3e += self.g.area[c] * (self.elev[c] - sea) as f64;
+            }
+        }
+        let old300 = format!("old>300: {:.2}% of ocean, thick {:.1} km, depth {:.2} km", o3a / oa.max(1e-12) * 100.0, o3t / o3a.max(1e-12), o3e / o3a.max(1e-12));
         // fragmentation: surface share in plate pieces other than each
         // plate's main piece (a plate should be one connected region)
         let frag = {
@@ -2527,10 +2814,10 @@ impl Sim {
             (total - main.values().sum::<f64>()) / TAU * 100.0
         };
         format!(
-            "[thick p10 {:.1} p50 {:.1} p90 {:.1}] land {}  cont {}  cont {:.1}% drowned {:.0}%  sea {:.2} km  ocean: thick {:.1} age {:.0} (>200: {:.1}%, {:.0}% on cont plates, max {:.0})  cont thick {:.1}  plates {} frag {:.2}%",
+            "[thick p10 {:.1} p50 {:.1} p90 {:.1}] land {}  cont {}  cont {:.1}% drowned {:.0}%  sea {:.2} km  ocean: thick {:.1} age {:.0} (>200: {:.1}%, {:.0}% on cont plates, max {:.0})  cont thick {:.1}  plates {} frag {:.2}%  {}",
             q(0.1), q(0.5), q(0.9),
             f(&land), f(&cont), ca / TAU * 100.0, dr / ca.max(1e-12) * 100.0, sea, ot / oa.max(1e-12), oage / oa.max(1e-12),
-            old / oa.max(1e-12) * 100.0, old_cp / old.max(1e-12) * 100.0, amax, ct / ca.max(1e-12), self.plates.len(), frag
+            old / oa.max(1e-12) * 100.0, old_cp / old.max(1e-12) * 100.0, amax, ct / ca.max(1e-12), self.plates.len(), frag, old300
         )
     }
 
@@ -2590,7 +2877,7 @@ impl Sim {
         println!("   old>200 patches: {:?}", pv);
         let info: Vec<(i32, i32)> = self.plates.iter().map(|p| ((p.cont_area / TAU * 1000.0) as i32, p.age_myr as i32)).collect();
         println!("   plates (cont‰, age) {:?}", info);
-        let mut pc: Vec<f64> = self.pair_coll.values().copied().collect();
+        let mut pc: Vec<f64> = self.pair_coll.values().map(|v| v.recent).collect();
         pc.sort_by(|a, b| b.partial_cmp(a).unwrap());
         pc.truncate(3);
         let speeds: Vec<i32> = self.plates.iter().map(|p| (len(p.omega) * self.prm.radius) as i32).collect();

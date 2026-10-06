@@ -87,7 +87,7 @@ export async function runDrift(grid: HexGrid, params: PlanetParams, progress: Dr
   } finally {
     tecto.dispose();
   }
-  return finish(grid, params, out);
+  return finishDrift(grid, params, out);
 }
 
 /** Engine parameters and starting state (plates, crust) for a planet. */
@@ -201,7 +201,8 @@ export function prepareDrift(grid: HexGrid, params: PlanetParams): { prm: Float6
   return { prm, init: { plate, cont, thick, age, omega } };
 }
 
-function finish(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftResult {
+/** Turns an engine snapshot into the world's fields (metres, sea level, plates). */
+export function finishDrift(grid: HexGrid, params: PlanetParams, out: TectoOutput): DriftResult {
   const n = grid.count;
   const R = params.radiusKm;
   const plates: Plate[] = out.plates.map((p, i) => {

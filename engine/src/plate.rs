@@ -38,6 +38,9 @@ pub struct Plate {
     pub cont_area: f64,
     /// Time since the plate was created or last reorganised (Myr).
     pub age_myr: f64,
+    /// No new subduction zone breaks out of this plate before this time
+    /// (it has just shed one, or is one).
+    pub quiet_until: f64,
 }
 
 impl Plate {
@@ -62,6 +65,7 @@ impl Plate {
             area: 0.0,
             cont_area: 0.0,
             age_myr: 0.0,
+            quiet_until: 0.0,
         }
     }
 
