@@ -51,11 +51,16 @@ const kmh = (m: number) => `${(m / 1000).toFixed(1)} km`;
 export function scoreWorld(w: World): Scorecard {
   const t0 = performance.now();
   const G = reliefScale(w.params.gravity);
-  const shape = landShape(w.grid, w.elevation, w.params.radiusKm, G);
+  // Low gravity lets mountains stand taller (strength limits scale with
+  // 1/g), but the bulk of the land still floats near sea level whatever
+  // the gravity, and taller ranges need more rock: the "high ground"
+  // heights scale with √(1/g), not 1/g.
+  const H = Math.sqrt(G);
+  const shape = landShape(w.grid, w.elevation, w.params.radiusKm, H);
   const metrics: Metric[] = [
     hypsometry(w),
     meanLandElevation(shape, G),
-    highGround(shape, G),
+    highGround(shape, H),
     landmasses(w),
     landInterior(shape),
     landScraps(shape),
@@ -134,7 +139,7 @@ function hypsometry(w: World): Metric {
 
 function meanLandElevation(s: LandShape, G: number): Metric {
   const v = s.meanM;
-  const lo = 350 * G, hi = 1500 * G;
+  const hi = 1500 * G, lo = Math.min(350, 0.5 * hi);
   return {
     id: 'land-mean',
     label: 'Mean land height',
@@ -294,17 +299,18 @@ function highestPeak(w: World, G: number): Metric {
   // highest such average (Himalaya/Tibet) is ~5.5–6 km against 8.8 km at
   // Everest's top. The gravity cap still bounds any average.
   const cap = MAX_PEAK_EARTH_M * G;
+  const lo = 0.3 * MAX_PEAK_EARTH_M * Math.sqrt(G);
   const v = w.stats.maxElevation;
   return {
     id: 'peak',
     label: 'Highest ground (cell average)',
     value: v,
     display: kmh(v),
-    band: `${kmh(0.3 * cap)}–${kmh(0.85 * cap)}`,
+    band: `${kmh(lo)}–${kmh(0.85 * cap)}`,
     failIf: `above ${kmh(cap)} (gravity limit)`,
     earth: '5.7–6.0 km (summit 8.8 km)',
-    status: status(v > cap * 1.001, v >= 0.3 * cap && v <= 0.85 * cap),
-    note: v < 0.3 * cap ? 'No major mountain range formed.' : undefined,
+    status: status(v > cap * 1.001, v >= lo && v <= 0.85 * cap),
+    note: v < lo ? 'No major mountain range formed.' : undefined,
   };
 }
 

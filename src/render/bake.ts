@@ -6,6 +6,9 @@ import type { World } from '../sim/world';
 import { addSurfaceDetail } from './detail';
 import { BOUNDARY_COLORS, hypsometric, oceanAgeColor, satelliteColor, type RGB } from './palettes';
 
+/** Sea-floor relief relative to land relief in the hill shading. */
+export const SEA_FLOOR_SHADE = 0.35;
+
 export type MapMode = 'satellite' | 'elevation' | 'plates' | 'age';
 
 export const MAP_MODES: { id: MapMode; label: string }[] = [
@@ -44,11 +47,16 @@ export class WorldBaker {
     return this.elevTex;
   }
 
-  /** Land-only height (m) as half floats, for displacement and bump mapping. */
+  /**
+   * Relief (m) as half floats, for displacement and hill shading. Land is
+   * its height; the sea floor is its depth scaled down (negative), so
+   * trenches, ridges and shelves are shaded too without drowning out the
+   * land. The globe's displacement ignores the negative part.
+   */
   heightMap(hex: boolean): Uint16Array {
     const e = this.elevation(hex);
     const out = new Uint16Array(e.length);
-    for (let i = 0; i < e.length; i++) out[i] = e[i] > 0 ? toHalf(e[i]) : 0;
+    for (let i = 0; i < e.length; i++) out[i] = toHalf(e[i] > 0 ? e[i] : e[i] * SEA_FLOOR_SHADE);
     return out;
   }
 

@@ -54,7 +54,8 @@ fn main() {
         if std::env::var("QUIET").is_err() {
             sim.debug_report();
         }
-        if std::env::var("CENSUS").is_ok() && (t / 100.0).floor() > ((t - chunk) / 100.0).floor() {
+        let every: f64 = std::env::var("EVERY").ok().map(|v| v.parse().unwrap()).unwrap_or(100.0);
+        if std::env::var("CENSUS").is_ok() && (t / every).floor() > ((t - chunk) / every).floor() {
             println!("t={:<4.0} {}", t, sim.census());
         }
     }

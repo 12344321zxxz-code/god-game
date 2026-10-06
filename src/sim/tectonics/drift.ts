@@ -4,7 +4,6 @@ import { hashString } from '../../core/rng';
 import type { HexGrid } from '../../grid/hexgrid';
 import { distanceField } from '../../grid/distance';
 import { loadTecto, P, PARAM_COUNT, type TectoInit, type TectoOutput, type TectoStats } from '../../engine/tecto';
-import { smoothField } from '../terrain/elevation';
 import { Boundary, Crust, Orogeny, type Plate } from '../world';
 import { classifyBoundaries, hslToRgb, runSnapshotTectonics } from './snapshot';
 import { M } from '../../core/dmath';
@@ -55,10 +54,17 @@ function dumpInit(...a: Parameters<typeof dumpInitAsync>) {
 
 export type DriftProgress = (fraction: number, myr: number) => void;
 
-/** Continental thickness (km) that floats at elevation e (km, datum). Inverse of the engine's isostasy. */
-export function thicknessForElevation(eKm: number): number {
+/** Sea level at the start, km above the engine's isostatic datum: the surface of ~33.5 km-thick crust. */
+const START_SEA_KM = -0.25;
+
+/**
+ * Continental thickness (km) that floats at height e (km) above the starting
+ * sea level; below it the water load pushes the column down (×1.45).
+ * Inverse of the engine's isostasy.
+ */
+export function thicknessAt(eKm: number): number {
   const e = eKm < 0 ? eKm / 1.45 : eKm;
-  return (e + 5.3) / 0.1515;
+  return (e + START_SEA_KM + 5.3) / 0.1515;
 }
 
 export async function runDrift(grid: HexGrid, params: PlanetParams, progress: DriftProgress = () => {}): Promise<DriftResult> {
@@ -128,11 +134,11 @@ export function prepareDrift(grid: HexGrid, params: PlanetParams): { prm: Float6
   const floorAge = seaFloorAge(grid, params, plate, omega);
   // Continental crust = plains + drowned margins. The outer band of each
   // continent — as wide as needed to hold the continental crust that is not
-  // land (Earth: ~30 % of it) — is a stretched margin thinning seaward from
-  // ~34 km to ~20 km, so the starting coastline runs along the margin and
-  // the plains (~38.5 km) stand ~0.5 km above the sea. Too narrow a margin
-  // put sea level on the plains themselves, and every later rise of sea
-  // level flooded the continents' interiors.
+  // land (Earth: ~30 % of it) — is the margin: a shelf just under the sea,
+  // then the slope down to thin, stretched crust (~21 km). The starting
+  // coastline runs along its inner edge and the plains stand ~0.4 km above
+  // the sea. Too narrow a margin put sea level on the plains themselves,
+  // and every later rise of sea level flooded the continents' interiors.
   const edge: number[] = [];
   for (let c = 0; c < n; c++) {
     if (snap.crust[c] !== Crust.Continent) continue;
@@ -162,11 +168,21 @@ export function prepareDrift(grid: HexGrid, params: PlanetParams): { prm: Float6
     if (snap.crust[c] === Crust.Continent) {
       cont[c] = 1;
       const x = grid.pos[3 * c], y = grid.pos[3 * c + 1], z = grid.pos[3 * c + 2];
-      // broad, gentle variation only (cratons and basins thousands of km
-      // across); small-scale bumps here became blotchy inland seas later
-      const plain = 38.5 + 9 * crustNoise.fbm(x, y, z, 1.3, 3);
+      // Heights relative to the starting sea level, turned into the
+      // crust thickness that floats there (the engine's isostasy).
+      // Plains: broad, gentle swells and basins thousands of km across
+      // around +0.4 km (Earth's median land height is 390 m; small-scale
+      // bumps here became blotchy inland seas later).
+      const plain = Math.max(0.08, 0.42 + 0.9 * crustNoise.fbm(x, y, z, 1.3, 3));
       const u = Math.min(inland[c], 2000) / marginKm;
-      thick[c] = u < 1 ? 20 + 14 * u : u < 1.6 ? 34 + (plain - 34) * smoothT((u - 1) / 0.6) : plain;
+      // Margin: the inner ~45 % is shelf, planed to wave base (Earth's
+      // shelves are about that share of its drowned continental crust);
+      // the outer part is the slope down to thin, stretched crust.
+      const e = u >= 1.6 ? plain
+        : u >= 1 ? 0.03 + (plain - 0.03) * smoothT((u - 1) / 0.6)
+        : u >= 0.55 ? -0.13 + 0.11 * ((u - 0.55) / 0.45)
+        : -2.6 + 2.47 * smoothT(u / 0.55);
+      thick[c] = thicknessAt(e);
     } else {
       // 7 km of basalt plus the sediment blanket old floor carries (the
       // run settles near ~1 km on average; starting bare made sea level
@@ -243,16 +259,14 @@ export function finishDrift(grid: HexGrid, params: PlanetParams, out: TectoOutpu
   const seaLevel = out.stats.seaLevelKm * 1000;
   const raw = new Float32Array(n);
   for (let c = 0; c < n; c++) raw[c] = out.elevKm[c] * 1000 - seaLevel;
-  const elevation = Float32Array.from(raw);
-  // one light pass takes the edge off single-cell steps — but never moves a
-  // coast: the engine's shoreline is kept exactly
-  smoothField(grid, elevation, 1);
+  // (No smoothing here: the maps interpolate between cells anyway, and a
+  // smoothing pass used to halve the shelves — a shelf cell averaged with
+  // the deep sea beside it is no longer a shelf — and shave the ranges.)
+  const elevation = new Float32Array(n);
   const cap = MAX_PEAK_EARTH_M * reliefScale(params.gravity);
   let land = 0;
   for (let c = 0; c < n; c++) {
-    let e = elevation[c];
-    if (raw[c] > 0 && e <= 0) e = Math.min(raw[c], 1);
-    else if (raw[c] <= 0 && e > 0) e = Math.max(raw[c], -1);
+    let e = raw[c];
     if (e > 0) e = softCap(e, cap);
     elevation[c] = e;
     if (e > 0) land += grid.area[c];

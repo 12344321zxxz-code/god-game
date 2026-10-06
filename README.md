@@ -49,19 +49,29 @@ The world is now made by running the plates through their history
   stripes and ocean depth follows age.
 - **Mountain building.** Every sinking slab feeds a narrow volcanic arc.
   A broad cordillera (40–400 km behind the trench) grows only where the
-  upper plate advances on the trench, by about a quarter of that advance,
-  and unevenly along the margin. Island arcs grow into new continental
+  upper plate advances on the trench, by about a third of that advance,
+  and unevenly along the margin; the crust it takes comes off the plate's
+  leading edge, which retreats (a plate that shortens gets narrower).
+  Island arcs grow into new continental
   crust, the forearc is scraped away, new sea floor thins the continent
   beside it, hot spots build island chains, plume-head plateaus and — under
   continents — broad domes like East Africa's.
 - **Isostasy, flow and erosion.** Elevation floats on crust thickness
   (Airy, 0.1515 km per km of crust; water-loaded ×1.45 below sea level;
   ocean depth from age by GDH1). Crust over 62 km flows under its own
-  weight (plateaus flatten at 4–5 km). Relief-driven erosion (Ahnert, with
-  local relief at most a quarter of the height) moves rock downhill, fills
-  land pits only to their spill point and builds shelves; a dead range
-  decays over ~150 Myr like the Appalachians. Old sea floor buried under
-  ~13 km of sediment becomes the floor of a continental basin.
+  weight (plateaus flatten at 4–5 km; the limit scales with 1/g, like the
+  other strength limits). Relief-driven erosion (Ahnert; local relief is a
+  few % of the height on plains, up to a third in mountains) moves rock
+  downhill and fills land pits only to their spill point; a dead range
+  decays over ~135 Myr like the Appalachians, and plains are slowly
+  planed toward sea level.
+- **Sediment.** Rivers carry it down one channel; under water it fans out,
+  mostly along the margin, and waves sweep whatever lies above wave base
+  sideways — so deltas feed shelves instead of single lobes running out
+  to the abyss. Old sea floor buried under ~13 km of sediment becomes the
+  floor of a continental basin. Of the sediment that rides a plate down a
+  trench, about half comes back (accretionary wedge and arc magma); the
+  rest is lost to the mantle.
 - **Plate motions from forces.** Slab pull, gravitational sliding (ridge
   push), collision resistance (against closing motion only) and drag from
   a slowly changing mantle flow, balanced against basal drag and scaled to
@@ -72,9 +82,14 @@ The world is now made by running the plates through their history
   ocean breaks away at passive margins (floor > 180 Myr) and founders
   against the continent it left or against younger floor; new plates are
   protected from the plate-count budget, slivers are absorbed.
-- **Sea level** comes from a fixed volume of water that relaxes toward the
-  Land slider's share over ~150 Myr (water exchange with the mantle), so
-  short-term sea level follows the basins.
+- **Sea level** comes from the volume of water, which relaxes (~60 Myr)
+  toward the level the planet started with — the surface of ~33.5 km-thick
+  crust — give or take 200 m to keep the Land slider's share dry. Land
+  area is therefore emergent, with the feedback real continents have:
+  crust that thickens stands higher and erodes faster, crust that thins
+  floods and is spared. Together with the sediment budget this keeps the
+  continents' volume, the land share and the mountains level over
+  billions of years.
 - **Exact bookkeeping.** Every crust column is updated exactly once per
   step; the result does not depend on how the run is chunked or how often
   it is looked at (tested), and is bit-identical across machines.
@@ -88,15 +103,16 @@ Some assumptions that matter (each one, when wrong, broke the continents):
   Earth; a boundary through a continent rifts or crumples it at once.
 - **Continents are plains plus drowned margins.** The outer band thins
   seaward like a stretched passive margin; plains stand ~0.5 km above the sea.
-- **Sea level follows a (slowly relaxing) volume of water**, set so the
-  Land slider's share is dry at the start. Forcing a fixed land share
-  instead made every bit of continental growth flood the plains.
+- **Sea level is tied to the crust, not to a land quota.** Forcing a fixed
+  land share made continental growth flood the plains, and — once crust
+  was being lost — drained the sea off the ocean floor to keep the quota.
 - **Passive margins rarely turn active**: only very old floor breaks away;
   old ocean also founders against younger ocean (Izu–Bonin style).
 - **Only very thick crust (>62 km) flows**; normal crust keeps its ranges.
 - **Starting state** (from the M1 sketch): continental crust = land + 0.1
-  of the surface; plains 38.5 ± 9 km thick, margins 20→34 km across the
-  outer band; sea-floor ages from distance to the start plates' own ridges,
+  of the surface; plains ~0.4 km above the sea (Earth's median land height
+  is 390 m), the outer band a shelf at wave base and then the slope down
+  to ~21 km-thick crust; sea-floor ages from distance to the start plates' own ridges,
   scaled ×0.55 toward the steady state (median ~50 Myr) with a sediment
   blanket of up to 1.5 km.
 
@@ -120,11 +136,17 @@ code (`scripts/earth-ref.ts`; a test checks that Earth passes every
 height and shape check). The harness for "does the world hold up over
 time" is `scripts/longscore.ts` (one run per seed, scored every 500 Myr).
 
+- **Every source of crust needs its sink.** Cordillera shortening that
+  added crust for free thickened the continents ~15 % per billion years;
+  removing it without returning any subducted sediment let erosion bleed
+  them away. The budget now closes: erosion → sea → trench → wedge and arc.
+
 Known limits: small pockets of sea floor trapped inside continents can
 survive the whole run (the oldest ~0.5 % of the ocean; Earth's eastern
 Mediterranean is such a pocket); cell-scale heights (~50 km at the default
 grid) cap high ground near 5–6 km, like Earth's highest 50 km averages;
-shelves are narrower than Earth's.
+shelves are about half as wide as Earth's; the valleys and ridges inside
+a cell are texture, not yet eroded terrain (that is M2c).
 
 It takes about 1.5–3 minutes for the default 164k-cell Earth. The M1 snapshot
 engine stays available as a quick sketch.

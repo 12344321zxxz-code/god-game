@@ -192,7 +192,16 @@ export class PlanetView {
     let globeMat: THREE.Material;
     let mapMat: THREE.Material;
     if (level === 0) {
-      globeMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, map: ct, bumpMap: ht, displacementMap: ht });
+      const gm = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, map: ct, bumpMap: ht, displacementMap: ht });
+      // the relief texture carries the sea floor as negative heights (for
+      // shading); only land is raised off the globe
+      gm.onBeforeCompile = (shader) => {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <displacementmap_vertex>',
+          '#ifdef USE_DISPLACEMENTMAP\n\ttransformed += normalize( objectNormal ) * ( max( texture2D( displacementMap, vDisplacementMapUv ).x, 0.0 ) * displacementScale + displacementBias );\n#endif',
+        );
+      };
+      globeMat = gm;
       mapMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, map: ct, bumpMap: ht });
     } else if (level === 1) {
       globeMat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0, map: ct });

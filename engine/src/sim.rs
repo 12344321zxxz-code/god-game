@@ -60,8 +60,11 @@ const ARC_TO_CONT: f32 = 26.0;
 /// lithosphere under a rifted margin is old and cold, so it sits deep
 /// (setting 0, i.e. ridge-hot, made it pop up ~3 km on conversion).
 const RIFTED_OCEAN_AGE: f32 = 80.0;
+/// Age given to a continental edge used up by shortening: older (denser)
+/// than any normal sea floor, so it sinks under whatever arrives.
+const USED_EDGE_AGE: f32 = 400.0;
 /// Thickest crust the lithosphere can hold up at 1 g (km); weaker gravity
-/// supports more (∝ √(g⊕/g), so Mars-size worlds reach ~130 km).
+/// supports more (the part above 35 km ∝ g⊕/g, like every strength limit).
 const MAX_THICK_EARTH: f32 = 95.0;
 
 // ---- force constants (relative; overall speed is normalised) ----
@@ -71,9 +74,23 @@ const K_COLL: f64 = 3.0;
 /// Basal drag weight of continental lithosphere relative to oceanic (deep keels).
 const DRAG_CONT: f64 = 2.0;
 /// Timescale (Myr) on which the ocean volume relaxes toward the land target.
-const WATER_RELAX_MYR: f64 = 150.0;
+const WATER_RELAX_MYR: f64 = 60.0;
 /// Sea floor older than this (Myr) starts to founder at plate edges.
 const INIT_CHECK_MYR: f64 = 10.0;
+/// How far (km) the long-term sea level may sit from its starting level to
+/// keep the requested share of land.
+const SEA_PLAY: f64 = 0.2;
+/// Local relief of flat land as a share of its height above the sea.
+const PLAIN_RELIEF: f64 = 0.035;
+/// River sediment builds the sea floor up to this level (km below sea
+/// level: a delta top); waves keep it from staying above WAVE_BASE.
+const DELTA_TOP: f64 = -0.05;
+/// Depth to which waves and currents sweep sediment sideways (km): the
+/// level shelves are planed to (~130 m on Earth).
+const WAVE_BASE: f64 = -0.14;
+/// Share of the crust above normal sea-floor thickness (sediment, mostly)
+/// that returns to the upper plate when sea floor is subducted.
+const SED_RETURN: f64 = 0.45;
 /// After a breakaway neither plate starts another for this long (Myr).
 const INIT_QUIET_MYR: f64 = 40.0;
 /// Oceanic crust plus sediment thicker than this (km) counts as
@@ -91,9 +108,9 @@ const CONT_SWELL: f64 = 1.0;
 /// a range's height: valleys are cut into the range, not down to sea
 /// level (about a third of the height in mountains, far less on
 /// plateaus). With isostasy a dead range then decays with an e-folding
-/// time of ~150 Myr — the Appalachians and Urals, ~300 Myr old, still
+/// time of ~135 Myr — the Appalachians and Urals, ~300 Myr old, still
 /// stand near 1 km.
-const RELIEF_SHARE: f64 = 0.25;
+const RELIEF_SHARE: f64 = 0.32;
 /// Collision shortening: e-folding width behind the suture, how far it can
 /// reach, and the crust thickness the belt holds before growing outward
 /// (Tibet: ~70 km; scaled with relief like the other limits).
@@ -107,7 +124,7 @@ const PROC_DT: f64 = 1.0;
 /// Relative speed (mm/yr) below which a boundary neither consumes nor makes crust.
 const MIN_RATE: f64 = 3.0;
 /// Hard cap on any plate's speed, mm/yr.
-const MAX_SPEED: f64 = 160.0;
+const MAX_SPEED: f64 = 110.0;
 
 const DEPTH_LUT_N: usize = 1024;
 /// √age step of the depth lookup table (covers 0–625 Myr).
@@ -325,6 +342,14 @@ pub struct Sim {
     swell: Vec<f32>,
     /// Continental crust driven into a collision this step (km·sr), per world cell.
     coll_in: Vec<f32>,
+    /// Sediment scraped off subducting sea floor (km·sr), per world cell of the upper plate.
+    accr: Vec<f32>,
+    /// Cells whose crust was taken by cordillera shortening this step.
+    fore: Vec<u8>,
+    /// Long-term sea level (km, isostatic datum), set at the start.
+    sea_datum: f64,
+    /// The level the sea is settling toward (what shelves are graded to).
+    sea_grade: f64,
     slab: Vec<f32>,
     slab_pid: Vec<u32>,
     sz: Vec<f32>,
@@ -364,7 +389,7 @@ pub const STAT_FIELDS: usize = 32;
 impl Sim {
     pub fn new(g: Grid, prm: Params) -> Sim {
         let n = g.n;
-        let max_thick = 35.0 + (MAX_THICK_EARTH - 35.0) * (prm.relief() as f32).sqrt();
+        let max_thick = 35.0 + (MAX_THICK_EARTH - 35.0) * prm.relief() as f32;
         let seed = prm.seed;
         Sim {
             rng: Rng::stream(seed, "drift"),
@@ -399,6 +424,10 @@ impl Sim {
             trench: vec![0.0; n],
             swell: vec![0.0; n],
             coll_in: vec![0.0; n],
+            accr: vec![0.0; n],
+            fore: vec![0; n],
+            sea_datum: 0.0,
+            sea_grade: 0.0,
             slab: vec![0.0; n],
             slab_pid: vec![NONE; n],
             sz: vec![0.0; n],
@@ -491,11 +520,12 @@ impl Sim {
         let sea = self.sea_level;
         self.compute_elev();
         self.water = (0..self.g.n).map(|c| self.g.area[c] * (sea - self.elev[c] as f64).max(0.0)).sum();
+        self.sea_datum = sea;
+        self.sea_grade = sea;
     }
 
-    /// Sea level (km) that leaves the requested land fraction dry, given
-    /// `self.order`. The land fraction is the player's control; the
-    /// continents' shape (plains + drowned margins) decides where it cuts.
+    /// Sea level (km) that would leave the requested land fraction dry,
+    /// given `self.order` (cells by descending elevation).
     fn sea_for_land(&self) -> f64 {
         let goal = self.prm.land_fraction * TAU;
         let mut acc = 0.0;
@@ -543,6 +573,13 @@ impl Sim {
     /// the flow under the plates scales with it, like the plates' own speeds.
     fn vigour(&self) -> f64 {
         self.prm.mean_speed / 35.0
+    }
+
+    /// Crust thickness (km) a collision belt holds before it grows outward
+    /// instead of up (what the crust can hold scales with 1/g, like every
+    /// strength limit).
+    fn coll_hold(&self) -> f64 {
+        (COLL_THICK_BASE + (COLL_THICK_EARTH - COLL_THICK_BASE) * self.prm.relief()).min(self.max_thick as f64 - 4.0)
     }
 
     fn rebuild_ids(&mut self) {
@@ -622,6 +659,7 @@ impl Sim {
         timed!(2, self.fill_gaps(dt, true));
         timed!(3, self.gather_world());
         self.dthick.fill(0.0);
+        self.fore.fill(0);
         self.oro_set.fill(0);
         // Slow surface processes run on a ~1 Myr clock (several motion
         // steps at high resolution) with the time accumulated since.
@@ -938,6 +976,9 @@ impl Sim {
                     e.peak = e.peak.max(e.recent);
                     p.remove(s);
                 } else {
+                    // the sediment it carried is scraped off against the upper
+                    // plate (accretionary wedge) instead of vanishing with it
+                    self.accr[c] += (p.thick[s] - OCEAN_THICK).max(0.0) * g.area[c] as f32;
                     let f = (p.age[s] as f64 / 80.0).clamp(0.1, 1.0);
                     self.slab[c] += (g.area[c] * f) as f32;
                     self.slab_pid[c] = pid;
@@ -1115,6 +1156,7 @@ impl Sim {
         let mut trench_src: Vec<u32> = vec![];
         let mut trench_depth: Vec<f32> = vec![];
         let relief = self.prm.relief();
+
         for c in 0..n {
             if self.sz[c] < 0.25 || self.owner[c] < 0 {
                 continue;
@@ -1171,12 +1213,30 @@ impl Sim {
             let owner = &self.owner;
             let src_owner: Vec<i32> = sources.iter().map(|&c| owner[c as usize]).collect();
             self.dij.run(&self.g, rk, &sources, 420.0, |d, si| owner[d] == src_owner[si]);
-            let tmax = 35.0 + 30.0 * relief.sqrt();
-            // Cordillera growth: magmatic addition plus tectonic shortening.
-            // A rigid plate cannot shorten, and taking the volume from
-            // elsewhere on the continent (tried: a back-arc band, then the
-            // whole interior) dug drowned basins behind every range, so the
-            // growth is simply added; erosion carries it back to the ocean.
+            let tmax = (35.0 + 30.0 * relief).min(self.max_thick as f64 - 4.0);
+            let mut short_vol = vec![0.0f64; sources.len()];
+            let mut edge_w = vec![0.0f64; sources.len()];
+            // What goes down a trench comes back up: part of the sediment
+            // (and other crust above normal sea-floor thickness) carried
+            // under is scraped off into the wedge at the plate's edge, part
+            // returns as arc magma; the rest is lost to the mantle. This is
+            // what balances the rock that erosion sends to the deep sea.
+            let back = |x: f64| 0.4 * (-(x / 60.0).powi(2)).exp() / 53.0 + 0.6 * (-((x - 130.0) / 45.0).powi(2)).exp() / 80.0;
+            let mut back_w = vec![0.0f64; sources.len()];
+            let room = |sim: &Sim, d: usize| ((tmax - (sim.thick_w[d] + sim.dthick[d]) as f64) / 20.0).clamp(0.02, 1.0);
+            for &d in &self.dij.touched {
+                let d = d as usize;
+                back_w[self.dij.src[d] as usize] += back(self.dij.dist[d] as f64) * room(self, d) * self.g.area[d];
+            }
+            let back_vol: Vec<f64> = sources.iter().map(|&c| SED_RETURN * self.accr[c as usize] as f64).collect();
+            for &c in &sources {
+                self.accr[c as usize] = 0.0;
+            }
+            // Cordillera growth: arc magmatism (new crust) plus tectonic
+            // shortening, whose crust comes off the plate's leading edge
+            // (taking it from a back-arc band or the whole interior dug
+            // drowned basins behind every range; adding it for free
+            // thickened the continents without end).
             for &d in &self.dij.touched {
                 let d = d as usize;
                 let x = self.dij.dist[d] as f64;
@@ -1186,6 +1246,13 @@ impl Sim {
                 // boundary that ever touched a coast left a range behind
                 let k = (conv_of[si] as f64 - 15.0).max(0.0) * dt / 40.0;
                 let h = (self.thick_w[d] + self.dthick[d]) as f64;
+                if back_vol[si] > 0.0 && back_w[si] > 0.0 {
+                    let add = back_vol[si] * back(x) * room(self, d) / back_w[si];
+                    self.dthick[d] += add as f32;
+                    if self.cont_w[d] != 0 {
+                        self.stats.budget[4] += add * self.g.area[d];
+                    }
+                }
                 let amount = if self.cont_w[d] != 0 {
                     // Two parts. Arc magmatism (~40 km³ per km of arc per
                     // Myr, Reymer & Schubert) feeds a narrow volcanic chain
@@ -1195,25 +1262,28 @@ impl Sim {
                     // the upper plate advances on the trench (Uyeda &
                     // Kanamori; Lamb & Davis): Andes, not Cascades — so
                     // most margins carry an arc, few a high range.
-                    // About a quarter of the upper plate's advance is taken up
+                    // About a third of the upper plate's advance is taken up
                     // by shortening (Andes: ~10 of ~30–45 mm/yr), the rest by
                     // trench retreat; spread over the ~250 km-wide belt that is
-                    // ~0.25·v·H/250 ≈ 0.038 km of crust per Myr per mm/yr.
+                    // ~0.3·v·H/250 ≈ 0.045 km of crust per Myr per mm/yr.
                     // Inherited structure makes some stretches of a margin
                     // shorten far more than others (segments fixed to the plate).
                     let pl = &self.plates[self.owner[d] as usize];
                     let lp = self.g.pos[pl.cell[self.oslot[d] as usize] as usize];
                     let seg = (1.0 + 2.2 * self.noise.fbm(lp, 4.0, 2)).clamp(0.1, 2.2);
-                    let push = 0.038 * seg * (adv_of[si] as f64 - 2.0).max(0.0) * dt;
+                    let push = 0.045 * seg * (adv_of[si] as f64 - 2.0).max(0.0) * dt;
                     let shape = smoothstep(40.0, 110.0, x) * (1.0 - smoothstep(240.0, 400.0, x));
                     let short = shape * ((tmax - h) / 30.0).clamp(0.0, 1.0) * push.min(k * 2.0);
+                    // (its volume comes off the plate's leading edge, below)
+                    short_vol[si] += short * self.g.area[d];
+                    edge_w[si] += (-(x / 60.0).powi(2)).exp() * self.g.area[d];
                     // subduction erosion scrapes the forearc (≈ as much as arcs add)
                     let scrape = 0.5 * (-(x / 60.0).powi(2)).exp() * k;
                     arc + short - scrape
                 } else {
                     let shape = (-((x - 140.0) / 60.0).powi(2)).exp();
                     // arc magmatism ≈ 40 km³ per km of arc per Myr (Reymer & Schubert)
-                    0.25 * shape * ((tmax * 0.6 - h) / 20.0).clamp(0.0, 1.0) * k
+                    0.25 * shape * (((tmax * 0.6).max(ARC_TO_CONT as f64 + 3.0) - h) / 20.0).clamp(0.0, 1.0) * k
                 };
                 if amount != 0.0 {
                     self.dthick[d] += amount as f32;
@@ -1224,6 +1294,37 @@ impl Sim {
                         self.oro_set[d] = if self.cont_w[d] != 0 { oro::ANDEAN } else { oro::ARC };
                     }
                 }
+            }
+            // A plate that shortens gets narrower: the crust that thickened
+            // the cordillera is taken from the plate's leading edge, which
+            // retreats at the shortening rate. (Adding it for free made the
+            // continents ~15 % thicker per billion years.)
+            for i in 0..self.dij.touched.len() {
+                let d = self.dij.touched[i] as usize;
+                let si = self.dij.src[d] as usize;
+                if self.cont_w[d] == 0 || short_vol[si] <= 0.0 || edge_w[si] <= 0.0 {
+                    continue;
+                }
+                let x = self.dij.dist[d] as f64;
+                let h = (self.thick_w[d] + self.dthick[d]) as f64;
+                let take = (short_vol[si] * (-(x / 60.0).powi(2)).exp() / edge_w[si]).min((h - 8.0).max(0.0));
+                self.dthick[d] -= take as f32;
+                self.stats.budget[0] -= take * self.g.area[d];
+                if take > 0.0 {
+                    self.fore[d] = 1;
+                }
+            }
+        }
+        for c in 0..n {
+            // (sediment queued where no trench is resolved: wedge on the spot)
+            if self.accr[c] > 0.0 {
+                if self.owner[c] >= 0 {
+                    self.dthick[c] += (SED_RETURN * self.accr[c] as f64 / self.g.area[c]) as f32;
+                    if self.cont_w[c] != 0 {
+                        self.stats.budget[4] += SED_RETURN * self.accr[c] as f64;
+                    }
+                }
+                self.accr[c] = 0.0;
             }
         }
         if !trench_src.is_empty() {
@@ -1263,7 +1364,7 @@ impl Sim {
             return;
         }
         let rk = self.r();
-        let hold = COLL_THICK_BASE + (COLL_THICK_EARTH - COLL_THICK_BASE) * self.prm.relief().sqrt();
+        let hold = self.coll_hold();
         let owner = &self.owner;
         let cont = &self.cont_w;
         let so: Vec<i32> = src.iter().map(|&c| owner[c as usize]).collect();
@@ -1279,7 +1380,8 @@ impl Sim {
         let weight = |sim: &Sim, d: usize| -> f64 {
             let x = sim.dij.dist[d] as f64;
             let h = (sim.thick_w[d] + sim.dthick[d]) as f64;
-            (-x / COLL_WIDTH_KM).exp() * ((hold - h) / 15.0).clamp(0.03, 1.0) * sim.g.area[d]
+            // (a full cell takes next to nothing: the belt grows outward, not up)
+            (-x / COLL_WIDTH_KM).exp() * ((hold - h) / 15.0).clamp(0.002, 1.0) * sim.g.area[d]
         };
         for i in 0..self.dij.touched.len() {
             let d0 = self.dij.touched[i] as usize;
@@ -1504,11 +1606,12 @@ impl Sim {
         // >55 km). Letting ordinary 42 km crust flow smeared every range
         // into a broad, low rim within a few Myr.
         let k_ch = 4000.0 * self.prm.gravity.min(2.0);
-        let phi = |x: f32| (((x - FLOW_ONSET_KM) / 15.0).clamp(0.0, 1.6) as f64).powi(2);
+        let onset = (35.0 + (FLOW_ONSET_KM - 35.0) * self.prm.relief() as f32).min(self.max_thick - 8.0).max(46.0);
+        let phi = |x: f32| (((x - onset) / 15.0).clamp(0.0, 1.6) as f64).powi(2);
         let active: Vec<u32> = (0..n as u32)
             .filter(|&c| {
                 let c = c as usize;
-                self.cont_w[c] != 0 && (h[c] > FLOW_ONSET_KM || self.g.nb(c).iter().any(|&d| h[d as usize] > FLOW_ONSET_KM))
+                self.cont_w[c] != 0 && (h[c] > onset || self.g.nb(c).iter().any(|&d| h[d as usize] > onset))
             })
             .collect();
         if !active.is_empty() {
@@ -1561,22 +1664,38 @@ impl Sim {
         // give the requested land fraction). Holding the land fraction fixed
         // instead meant every bit of continental growth — arcs, ranges —
         // pushed the sea up over the continents' plains.
-        let sea = if flag("TECTO_FIXED_LAND") {
-            self.sea_for_land()
-        } else {
-            // Over hundreds of Myr the ocean trades water with the mantle
-            // and the continents are planed toward base level, which keeps
-            // Earth's freeboard steady; model that as a slow relaxation of
-            // the water volume toward the requested land share (τ 150 Myr).
-            // Short-term sea level still follows the basins.
-            let target = self.volume_at(self.sea_for_land());
+        let sea = {
+            // Over hundreds of Myr the ocean trades water with the mantle,
+            // which keeps Earth's freeboard steady: sea level stays near the
+            // surface of crust ~34 km thick. Model that as a slow relaxation
+            // of the water volume toward the starting sea level (τ 60 Myr);
+            // short-term sea level still follows the basins. Land area is
+            // then emergent, with the feedback real continents have: crust
+            // that thickens stands higher and erodes faster, crust that
+            // thins floods and is spared. (Aiming at a set land area instead
+            // had no such feedback: when the continents lost crust, the sea
+            // was drained off the ocean floor to keep the land area up.)
+            //
+            // Within ±SEA_PLAY km of that level the sea settles where the
+            // Land slider's share is dry — a nudge that cannot run away.
+            let level = self.sea_datum + (self.sea_for_land() - self.sea_datum).clamp(-SEA_PLAY, SEA_PLAY);
+            self.sea_grade = level;
+            let target = self.volume_at(level);
             self.water += (target - self.water) * (1.0 - (-dt / WATER_RELAX_MYR).exp());
             self.sea_for_volume()
         };
         self.sea_level = sea;
         let k = if flag("TECTO_NO_EROSION") { 0.0 } else { 0.1535 * self.prm.erosion };
+        // Shelves are graded to the long-term sea level, not to every
+        // highstand: building them up to each passing high sea left them
+        // dry land whenever the sea fell back (a one-way ratchet real
+        // margins escape by subsiding).
+        let grade = self.sea_grade.min(sea) - sea;
+        let (delta_top, wave_base) = (DELTA_TOP + grade, WAVE_BASE + grade);
         let rk = self.prm.radius;
         self.carry.fill(0.0);
+        // (elevation gained by sea-floor cells in this pass, km)
+        self.work.fill(0.0);
         for i in 0..n {
             let c = self.order[i] as usize;
             let e = self.elev[c] as f64 - sea;
@@ -1595,13 +1714,16 @@ impl Sim {
             }
             let mut vol = self.carry[c] as f64; // sr·km of rock
             if e > 0.0 {
-                // local relief of the drainage basins Ahnert measured: small on
-                // plains (a few % of height), large on steep ground
-                // (plains: ~2 m/Myr of rock at 0.5 km, like cratons' cosmogenic rates)
-                // (slopes under ~3 m/km are plains — at 60 km cells they are
-                // mostly cell-to-cell noise, and letting them count wore the
-                // cratons down five times faster than Earth's)
-                let relief = (0.015 * e + 80.0 * (slope - 0.003).max(0.0)).min(RELIEF_SHARE * e);
+                // Local relief of the drainage basins Ahnert measured: a
+                // modest share of the height on plains (PLAIN_RELIEF: ~2.7 m/Myr
+                // of rock at 0.5 km, like the cosmogenic rates of cratons and
+                // lowlands), up to RELIEF_SHARE of it on steep ground. Slopes
+                // under ~3 m/km are plains — at 60 km cells they are mostly
+                // cell-to-cell noise. Slow as it is, this is what planes old
+                // continents toward sea level and feeds the shelves: without
+                // it the plains kept their starting height for billions of
+                // years, and the land stood twice as high as Earth's.
+                let relief = (PLAIN_RELIEF * e + 80.0 * (slope - 0.003).max(0.0)).min(RELIEF_SHARE * e);
                 let rock = (k * relief * dt).min(0.5 * e / 0.1515); // km of crust
                 self.dthick[c] -= rock as f32;
                 if self.cont_w[c] != 0 {
@@ -1618,7 +1740,7 @@ impl Sim {
             // are artefacts, and real rivers carry the load on to the sea —
             // trapping it all on land thickened the continents without end);
             // what is left is carried off to the deep ocean.
-            if e < -0.15 || rcv == usize::MAX {
+            if e < delta_top || rcv == usize::MAX {
                 let fac = if self.cont_w[c] != 0 { 0.1515 * 1.45 } else { 0.176 };
                 let room = if rcv == usize::MAX {
                     if e > 0.0 {
@@ -1628,17 +1750,96 @@ impl Sim {
                         f64::INFINITY
                     }
                 } else {
-                    ((-0.15 - e) / fac).max(0.0)
+                    ((delta_top - e) / fac).max(0.0)
                 };
                 let dep = (vol / self.g.area[c]).min(room);
                 self.dthick[c] += dep as f32;
+                if e <= 0.0 {
+                    self.work[c] += (dep * fac) as f32;
+                }
                 if self.cont_w[c] != 0 {
                     self.stats.budget[4] += dep * self.g.area[c];
                 }
                 vol -= dep * self.g.area[c];
             }
             if rcv != usize::MAX && vol > 0.0 {
-                self.carry[rcv] += vol as f32;
+                if e > 0.0 {
+                    // rivers: one channel downhill
+                    self.carry[rcv] += vol as f32;
+                } else {
+                    // Under water the load fans out over every lower
+                    // neighbour, most of it to where the sea is shallow
+                    // (along the margin), so a big river feeds a shelf and
+                    // not just one lobe running out to the abyss.
+                    let mut recv: [(usize, f64); 8] = [(0, 0.0); 8];
+                    let mut m = 0;
+                    let mut wsum = 0.0;
+                    for &d in self.g.nb(c) {
+                        let d = d as usize;
+                        if self.elev[d] < self.elev[c] && m < 8 {
+                            let fac_d = if self.cont_w[d] != 0 { 0.1515 * 1.45 } else { 0.176 };
+                            let room = ((delta_top - (self.elev[d] as f64 - sea)) / fac_d).max(0.0);
+                            let w = 1.0 / (room + 0.5);
+                            recv[m] = (d, w);
+                            wsum += w;
+                            m += 1;
+                        }
+                    }
+                    for &(d, w) in &recv[..m] {
+                        self.carry[d] += (vol * w / wsum) as f32;
+                    }
+                }
+            }
+        }
+        // Waves and currents: sediment above wave base does not stay where
+        // the river dropped it. It is swept to neighbouring sea floor that
+        // is still below wave base — mostly along the coast, where little
+        // is needed to fill up, less down the slope. A delta thus feeds a
+        // shelf along the whole margin instead of one lobe pushed out over
+        // deep water (which sent most sediment to the deep sea, and left
+        // the shelves a third as wide as Earth's).
+        for i in 0..n {
+            let c = self.order[i] as usize;
+            let e = self.elev[c] as f64 - sea + self.work[c] as f64;
+            if e >= 0.0 || e <= wave_base || self.owner[c] < 0 {
+                continue;
+            }
+            let fac_c = if self.cont_w[c] != 0 { 0.1515 * 1.45 } else { 0.176 };
+            let mut recv: [(usize, f64, f64); 8] = [(0, 0.0, 0.0); 8]; // cell, room (km of sediment), weight
+            let mut m = 0;
+            let mut wsum = 0.0;
+            for &d in self.g.nb(c) {
+                let d = d as usize;
+                let ed = self.elev[d] as f64 - sea + self.work[d] as f64;
+                if ed < wave_base && self.owner[d] >= 0 && m < 8 {
+                    let fac_d = if self.cont_w[d] != 0 { 0.1515 * 1.45 } else { 0.176 };
+                    let room = (wave_base - ed) / fac_d;
+                    let w = 1.0 / (room + 0.5);
+                    recv[m] = (d, room, w);
+                    wsum += w;
+                    m += 1;
+                }
+            }
+            if m == 0 {
+                continue;
+            }
+            let avail = (e - wave_base) / fac_c * self.g.area[c]; // sr·km of sediment above wave base
+            let mut moved = 0.0;
+            for &(d, room, w) in &recv[..m] {
+                let give = (avail * w / wsum / self.g.area[d]).min(room);
+                let fac_d = if self.cont_w[d] != 0 { 0.1515 * 1.45 } else { 0.176 };
+                self.dthick[d] += give as f32;
+                self.work[d] += (give * fac_d) as f32;
+                if self.cont_w[d] != 0 {
+                    self.stats.budget[4] += give * self.g.area[d];
+                }
+                moved += give * self.g.area[d];
+            }
+            let take = moved / self.g.area[c];
+            self.dthick[c] -= take as f32;
+            self.work[c] -= (take * fac_c) as f32;
+            if self.cont_w[c] != 0 {
+                self.stats.budget[3] -= take * self.g.area[c];
             }
         }
     }
@@ -1683,10 +1884,14 @@ impl Sim {
                 p.age[s] += dtf;
                 p.oro_age[s] += dtf;
                 if p.cont[s] != 0 && p.thick[s] < CONT_MIN {
-                    // stretched to breakup: becomes (cold, deep) sea floor
+                    // stretched to breakup: becomes (cold, deep) sea floor.
+                    // A leading edge used up by shortening is a sliver the
+                    // incoming plate overrides at once (old = dense), so the
+                    // trench follows the retreating continent instead of a
+                    // strip of leftover floor growing in front of it.
                     self.stats.cont_lost += self.g.area[p.cell[s] as usize];
                     p.cont[s] = 0;
-                    p.age[s] = RIFTED_OCEAN_AGE;
+                    p.age[s] = if self.fore[p.world[s] as usize] != 0 { USED_EDGE_AGE } else { RIFTED_OCEAN_AGE };
                 } else if p.cont[s] == 0 && p.thick[s] > BASIN_TO_CONT && p.age[s] > 50.0 {
                     // Old sea floor buried under ~13 km or more of sediment (a
                     // trapped basin like the Caspian, or the foot of a big
@@ -1830,6 +2035,7 @@ impl Sim {
             tq[li] = add(tq[li], cross(p, f));
         }
         // collision resistance
+        let hold = self.coll_hold();
         for c in 0..n {
             if self.cz[c] < 0.01 {
                 continue;
@@ -1857,7 +2063,12 @@ impl Sim {
             if conv <= 0.0 {
                 continue;
             }
-            let f = scale(nrm, K_COLL * self.cz[c] as f64 * self.g.area[c] * (conv / 10.0).min(1.0));
+            // A belt already as thick as crust can stand pushes back hard
+            // (its weight resists more shortening): this is what finally
+            // stops a long collision, instead of the plateau being pumped
+            // up past its limit.
+            let full = 1.0 + 8.0 * smoothstep(hold, hold + 10.0, self.thick_w[c] as f64);
+            let f = scale(nrm, K_COLL * full * self.cz[c] as f64 * self.g.area[c] * (conv / 10.0).min(1.0));
             tq[lo] = add(tq[lo], cross(p, f));
             tq[top] = sub(tq[top], cross(p, f));
         }
@@ -2780,6 +2991,16 @@ impl Sim {
                 o3e += self.g.area[c] * (self.elev[c] - sea) as f64;
             }
         }
+        let (mut shelf, mut low) = (0.0, 0.0);
+        for c in 0..n {
+            let e = self.elev[c] - sea;
+            if e <= 0.0 && e > -0.2 {
+                shelf += self.g.area[c];
+            } else if e > 0.0 && e < 0.1 {
+                low += self.g.area[c];
+            }
+        }
+        let shelf_txt = format!("shelf {:.1}% low-land {:.1}%", shelf / TAU * 100.0, low / TAU * 100.0);
         let old300 = format!("old>300: {:.2}% of ocean, thick {:.1} km, depth {:.2} km", o3a / oa.max(1e-12) * 100.0, o3t / o3a.max(1e-12), o3e / o3a.max(1e-12));
         // fragmentation: surface share in plate pieces other than each
         // plate's main piece (a plate should be one connected region)
@@ -2814,10 +3035,10 @@ impl Sim {
             (total - main.values().sum::<f64>()) / TAU * 100.0
         };
         format!(
-            "[thick p10 {:.1} p50 {:.1} p90 {:.1}] land {}  cont {}  cont {:.1}% drowned {:.0}%  sea {:.2} km  ocean: thick {:.1} age {:.0} (>200: {:.1}%, {:.0}% on cont plates, max {:.0})  cont thick {:.1}  plates {} frag {:.2}%  {}",
+            "[thick p10 {:.1} p50 {:.1} p90 {:.1}] land {:.1}% {}  cont {}  cont {:.1}% drowned {:.0}%  sea {:.2} km  ocean: thick {:.1} age {:.0} (>200: {:.1}%, {:.0}% on cont plates, max {:.0})  cont thick {:.1}  plates {} frag {:.2}%  {} {}",
             q(0.1), q(0.5), q(0.9),
-            f(&land), f(&cont), ca / TAU * 100.0, dr / ca.max(1e-12) * 100.0, sea, ot / oa.max(1e-12), oage / oa.max(1e-12),
-            old / oa.max(1e-12) * 100.0, old_cp / old.max(1e-12) * 100.0, amax, ct / ca.max(1e-12), self.plates.len(), frag, old300
+            land.iter().sum::<f64>(), f(&land), f(&cont), ca / TAU * 100.0, dr / ca.max(1e-12) * 100.0, sea, ot / oa.max(1e-12), oage / oa.max(1e-12),
+            old / oa.max(1e-12) * 100.0, old_cp / old.max(1e-12) * 100.0, amax, ct / ca.max(1e-12), self.plates.len(), frag, shelf_txt, old300
         )
     }
 

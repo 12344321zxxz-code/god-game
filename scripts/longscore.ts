@@ -15,7 +15,7 @@ const seeds = seedArgs.length ? seedArgs : ['baseline-0', 'baseline-1', 'baselin
 const preset = (process.env.PRESET ?? 'earth') as 'earth' | 'mars' | 'moon';
 await initDeterministicMath();
 const pct = (v: number) => (100 * v).toFixed(0).padStart(3);
-console.log('seed          Myr  land  mean  med  >1k  >2k inter scrap big1 n1%  peak  age50 age99 pl  flags');
+console.log('seed          Myr  land  mean  med  >1k  >2k inter scrap big1 n1%  peak  age50 age99 shelf pl  flags');
 const sums = new Map<number, number[]>();
 for (const seed of seeds) {
   const params = { ...presetParams(preset, seed), gridFreq: Number(freqS) };
@@ -36,13 +36,13 @@ for (const seed of seeds) {
       stats: { cells: grid.count, spacingKm: 0, landFraction: d.landFraction, maxElevation: maxE, minElevation: minE, timings: {}, drift: d.drift },
     };
     const sc = scoreWorld(w);
-    const s = landShape(grid, d.elevation, params.radiusKm, 1 / Math.max(params.gravity, 1 / 3));
+    const s = landShape(grid, d.elevation, params.radiusKm, Math.sqrt(1 / Math.max(params.gravity, 1 / 3)));
     const m = (id: string) => sc.metrics.find((x) => x.id === id)!;
     const flags = sc.metrics.filter((x) => x.status === 'fail' || x.status === 'warn').map((x) => `${x.status === 'fail' ? 'FAIL' : 'warn'}:${x.id}`).join(' ');
     console.log(
-      `${seed.padEnd(13)} ${String(at).padStart(4)} ${pct(s.landFraction)}% ${s.meanM.toFixed(0).padStart(5)} ${s.medianM.toFixed(0).padStart(4)} ${pct(s.above1k)}% ${(100 * s.above2k).toFixed(1).padStart(4)} ${pct(s.interior)}%  ${(100 * s.scraps).toFixed(1).padStart(4)} ${pct(m('landmass').value!)}% ${String(s.majorMasses).padStart(3)} ${(maxE / 1000).toFixed(1).padStart(5)} ${m('crust-median').value!.toFixed(0).padStart(6)} ${m('crust-age').value!.toFixed(0).padStart(5)} ${String(d.plates.length).padStart(2)}  ${flags}`,
+      `${seed.padEnd(13)} ${String(at).padStart(4)} ${pct(s.landFraction)}% ${s.meanM.toFixed(0).padStart(5)} ${s.medianM.toFixed(0).padStart(4)} ${pct(s.above1k)}% ${(100 * s.above2k).toFixed(1).padStart(4)} ${pct(s.interior)}%  ${(100 * s.scraps).toFixed(1).padStart(4)} ${pct(m('landmass').value!)}% ${String(s.majorMasses).padStart(3)} ${(maxE / 1000).toFixed(1).padStart(5)} ${m('crust-median').value!.toFixed(0).padStart(6)} ${m('crust-age').value!.toFixed(0).padStart(5)} ${m('shelf').value!.toFixed(0).padStart(5)} ${String(d.plates.length).padStart(2)}  ${flags}`,
     );
-    const row = [s.landFraction, s.meanM, s.medianM, s.above1k, s.above2k, s.interior, s.scraps, m('landmass').value!, s.majorMasses, maxE / 1000, m('crust-median').value!, m('crust-age').value!];
+    const row = [s.landFraction, s.meanM, s.medianM, s.above1k, s.above2k, s.interior, s.scraps, m('landmass').value!, s.majorMasses, maxE / 1000, m('crust-median').value!, m('crust-age').value!, m('shelf').value!];
     const acc = sums.get(at) ?? new Array(row.length + 1).fill(0);
     row.forEach((v, i) => (acc[i] += v));
     acc[row.length]++;
@@ -53,6 +53,6 @@ for (const seed of seeds) {
 for (const [at, acc] of sums) {
   const k = acc[acc.length - 1];
   const a = acc.map((v) => v / k);
-  console.log(`MEAN          ${String(at).padStart(4)} ${pct(a[0])}% ${a[1].toFixed(0).padStart(5)} ${a[2].toFixed(0).padStart(4)} ${pct(a[3])}% ${(100 * a[4]).toFixed(1).padStart(4)} ${pct(a[5])}%  ${(100 * a[6]).toFixed(1).padStart(4)} ${pct(a[7])}% ${a[8].toFixed(1).padStart(3)} ${a[9].toFixed(1).padStart(5)} ${a[10].toFixed(0).padStart(6)} ${a[11].toFixed(0).padStart(5)}`);
+  console.log(`MEAN          ${String(at).padStart(4)} ${pct(a[0])}% ${a[1].toFixed(0).padStart(5)} ${a[2].toFixed(0).padStart(4)} ${pct(a[3])}% ${(100 * a[4]).toFixed(1).padStart(4)} ${pct(a[5])}%  ${(100 * a[6]).toFixed(1).padStart(4)} ${pct(a[7])}% ${a[8].toFixed(1).padStart(3)} ${a[9].toFixed(1).padStart(5)} ${a[10].toFixed(0).padStart(6)} ${a[11].toFixed(0).padStart(5)} ${a[12].toFixed(0).padStart(5)}`);
 }
-console.log('EARTH              29%   665  390  20%  5.5  63%   3.0  ~45%   6   5.8     ~55  ~180');
+console.log('EARTH              29%   665  390  20%  5.5  63%   3.0  ~45%   6   5.8     ~55  ~180    64');

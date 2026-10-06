@@ -61,10 +61,10 @@ const panel = new Panel(document.getElementById('panel')!, params, display, {
     updateLegend();
   },
   onExportView() {
-    download(view.screenshot(), `${fileStem()}-view.png`);
+    void download(view.screenshot(), `${fileStem()}-view.png`);
   },
   onExportMap() {
-    if (current) download(textureToPng(current.rgba, current.width, current.height), `${fileStem()}-${display.mode}-map.png`);
+    if (current) void download(textureToPng(current.rgba, current.width, current.height), `${fileStem()}-${display.mode}-map.png`);
   },
   async onCopyLink() {
     try {
@@ -215,7 +215,30 @@ function fmtLat(v: number) { return `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'N' :
 function fmtLon(v: number) { return `${Math.abs(v).toFixed(1)}°${v >= 0 ? 'E' : 'W'}`; }
 function fileStem() { return `planet-${params.seed.replace(/[^a-z0-9-]/gi, '_')}`; }
 
-function download(url: string, name: string) {
+/** Saves a data-URL image. Inside a claude.ai artifact a page cannot
+ *  download by itself: the file is handed to the viewer's `downloads`
+ *  capability (which asks before saving); elsewhere a plain link does it. */
+async function download(url: string, name: string) {
+  const claude = (window as unknown as { claude?: { use?: (n: string) => Promise<{ save(r: { filename: string; data: Blob }): Promise<unknown> } | null> } }).claude;
+  if (claude?.use) {
+    try {
+      const downloads = await claude.use('downloads');
+      if (downloads) {
+        const bin = atob(url.slice(url.indexOf(',') + 1));
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        await downloads.save({ filename: name, data: new Blob([bytes], { type: 'image/png' }) });
+        flashStatus('Image saved');
+      } else {
+        flashStatus('Saving is not available here');
+      }
+      return;
+    } catch (e) {
+      const code = (e as { code?: string } | null)?.code;
+      if (code !== 'declined') flashStatus(code === 'rate_limited' ? 'A save is already waiting' : 'Saving is not available here');
+      return;
+    }
+  }
   const a = document.createElement('a');
   a.href = url;
   a.download = name;

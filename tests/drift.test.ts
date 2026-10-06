@@ -90,7 +90,9 @@ describe('drift engine (M2b)', async () => {
       let time = t.output().stats.time;
       while (time < at - 1e-6) time = t.run(at - time);
       const s = landShape(grid, finishDrift(grid, params, t.output()).elevation, 6371, 1);
-      expect(s.above1k, `high ground at ${at} Myr`).toBeGreaterThan(0.08);
+      // (mountains take a few hundred Myr to build from the flat start;
+      // what must not happen is that they are gone again later)
+      expect(s.above1k, `high ground at ${at} Myr`).toBeGreaterThan(at < 500 ? 0.04 : 0.08);
       expect(s.interior, `interior land at ${at} Myr`).toBeGreaterThan(0.35);
       expect(s.scraps, `land in scraps at ${at} Myr`).toBeLessThan(0.12);
       expect(s.majorMasses, `landmasses at ${at} Myr`).toBeLessThanOrEqual(9);
@@ -147,31 +149,17 @@ describe('drift engine (M2b)', async () => {
     expect(w.stats.landFraction).toBeLessThan(0.4);
   });
 
-  it('keeps continents whole: most continental crust is dry land in one piece', () => {
-    const g = w.grid;
-    const piece = (inside: (c: number) => boolean) => {
-      const seen = new Uint8Array(g.count);
-      let best = 0;
-      for (let s = 0; s < g.count; s++) {
-        if (seen[s] || !inside(s)) continue;
-        let a = 0;
-        const st = [s];
-        seen[s] = 1;
-        while (st.length) {
-          const c = st.pop()!;
-          a += g.area[c];
-          for (let k = g.nbrOffset[c]; k < g.nbrOffset[c + 1]; k++) {
-            const d = g.nbrs[k];
-            if (!seen[d] && inside(d)) { seen[d] = 1; st.push(d); }
-          }
-        }
-        best = Math.max(best, a);
-      }
-      return best;
-    };
-    const land = piece((c) => w.elevation[c] > 0);
-    const cont = piece((c) => w.crust[c] === Crust.Continent);
-    expect(land / cont).toBeGreaterThan(0.5);
+  it('keeps continents above water: most continental crust is dry land', () => {
+    // (whether the land is in few solid pieces is checked over a long
+    // history above; here: the continents must not be drowned)
+    let cont = 0, dry = 0;
+    for (let c = 0; c < w.grid.count; c++) {
+      if (w.crust[c] !== Crust.Continent) continue;
+      cont += w.grid.area[c];
+      if (w.elevation[c] > 0) dry += w.grid.area[c];
+    }
+    expect(dry / cont).toBeGreaterThan(0.6);
+    expect(dry / cont).toBeLessThan(0.95);
   });
 
   it('grows real relief', () => {
